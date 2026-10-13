@@ -1,0 +1,299 @@
+{
+  "common": {
+    "appName": "AmisiBiz",
+    "tagline": "Business, Simplified.",
+    "loading": "Loading...",
+    "save": "Save changes",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "back": "Back",
+    "next": "Next",
+    "submit": "Submit",
+    "confirm": "Confirm",
+    "close": "Close",
+    "search": "Search...",
+    "noResults": "No results found.",
+    "error": "Something went wrong. Please try again.",
+    "success": "Done!",
+    "required": "Required"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "invoices": "Invoices",
+    "crm": "CRM",
+    "inventory": "Inventory",
+    "hr": "Human Resources",
+    "payroll": "Payroll",
+    "purchasing": "Purchasing",
+    "accounting": "Accounting",
+    "reports": "Reports",
+    "documents": "Documents",
+    "settings": "Settings",
+    "team": "Team",
+    "signOut": "Sign out"
+  },
+  "auth": {
+    "login": {
+      "title": "Welcome back",
+      "subtitle": "Sign in to your AmisiBiz account",
+      "emailLabel": "Email address",
+      "emailPlaceholder": "you@example.com",
+      "passwordLabel": "Password",
+      "passwordPlaceholder": "Your password",
+      "forgotPassword": "Forgot password?",
+      "submit": "Sign in",
+      "submitting": "Signing in...",
+      "noAccount": "Don't have an account?",
+      "registerLink": "Create account",
+      "error": {
+        "invalid": "Invalid email or password.",
+        "suspended": "Your account has been suspended. Contact support.",
+        "generic": "Sign in failed. Please try again."
+      }
+    },
+    "register": {
+      "title": "Create your account",
+      "subtitle": "Create your organisation's workspace on AmisiBiz.",
+      "nameLabel": "Your full name",
+      "namePlaceholder": "Amisi Genuine",
+      "emailLabel": "Work email",
+      "emailPlaceholder": "you@company.com",
+      "passwordLabel": "Password",
+      "passwordPlaceholder": "Min. 8 characters",
+      "confirmPasswordLabel": "Confirm password",
+      "tenantNameLabel": "Organisation name",
+      "tenantNamePlaceholder": "Amisi Co. Ltd",
+      "submit": "Create account",
+      "submitting": "Creating account...",
+      "hasAccount": "Already have an account?",
+      "loginLink": "Sign in",
+      "successTitle": "Account created!",
+      "successSubtitle": "You can now sign in to AmisiBiz.",
+      "terms": "By creating an account, you agree to our Terms of Service and Privacy Policy."
+    },
+    "forgotPassword": {
+      "title": "Reset your password",
+      "subtitle": "Enter your email and we'll send you a reset link.",
+      "emailLabel": "Email address",
+      "submit": "Send reset link",
+      "submitting": "Sending...",
+      "success": "If an account exists for that email, a reset link has been sent.",
+      "backToLogin": "Back to sign in"
+    },
+    "resetPassword": {
+      "title": "Choose a new password",
+      "subtitle": "Enter a new password for your account.",
+      "passwordLabel": "New password",
+      "confirmPasswordLabel": "Confirm new password",
+      "submit": "Update password",
+      "submitting": "Updating...",
+      "success": "Your password has been updated. You can now sign in.",
+      "invalidToken": "This reset link is invalid or has expired.",
+      "backToLogin": "Back to sign in"
+    },
+    "verifyEmail": {
+      "title": "Email verification",
+      "verifying": "Verifying your email address...",
+      "success": "Your email address has been verified.",
+      "error": "This verification link is invalid or has expired.",
+      "backToLogin": "Back to sign in"
+    }
+  },
+  "dashboard": {
+    "welcome": "Welcome back, {name}",
+    "overview": "Overview",
+    "recentActivity": "Recent activity",
+    "quickActions": "Quick actions",
+    "trial": {
+      "banner": "You are on a free trial. {days} days remaining.",
+      "upgrade": "Upgrade now"
+    }
+  },
+  "team": {
+    "title": "Team",
+    "invite": "Invite member",
+    "members": "Members",
+    "invitations": "Pending invitations",
+    "role": "Role",
+    "status": "Status",
+    "actions": "Actions",
+    "removeConfirm": "Remove this member from the organisation?",
+    "update": "Update",
+    "remove": "Remove",
+    "inviteSuccess": "Invitation sent successfully.",
+    "roles": {
+      "BUSINESS_OWNER": "Owner",
+      "BUSINESS_ADMIN": "Admin",
+      "DOCUMENT_MANAGER": "Document Manager",
+      "SALES_STAFF": "Sales Staff",
+      "VIEWER": "Viewer"
+    }
+  },
+  "workspace": {
+    "brandFallback": "Workspace",
+    "noWorkspaceTitle": "No workspace available",
+    "noWorkspaceDescription": "Your account isn't linked to a business workspace yet. Contact your administrator or create one.",
+    "signedInAs": "Signed in as",
+    "suspendedTitle": "Workspace unavailable",
+    "suspendedDescription": "This organisation's workspace is currently unavailable. Contact your administrator.",
+    "nav": {
+      "overview": "Overview",
+      "contacts": "Contacts",
+      "items": "Items",
+      "documents": "Documents",
+      "branding": "Branding",
+      "team": "Team",
+      "dashboard": "Dashboard"
+    }
+  },
+  "modules": {
+    "newButton": "New",
+    "contacts": {
+      "title": "Contacts",
+      "description": "The people and companies your business works with.",
+      "emptyTitle": "No contacts yet",
+      "emptyDescription": "Contacts you add will appear here. The CRM module arrives in a later phase."
+    },
+    "items": {
+      "title": "Items",
+      "description": "The products and services your business sells.",
+      "emptyTitle": "No items yet",
+      "emptyDescription": "Catalogue items will appear here. The items module arrives in a later phase."
+    },
+    "documents": {
+      "title": "Documents",
+      "description": "Quotes, invoices and other business documents.",
+      "emptyTitle": "No documents yet",
+      "emptyDescription": "Documents you create will appear here. The documents module arrives in a later phase."
+    }
+  },
+  "branding": {
+    "title": "Branding",
+    "description": "Configure the colours and logo used on your own documents.",
+    "providerTitle": "Product branding",
+    "providerDescription": "AmisiBiz is provided by Amisi Genuine Enterprises. The product interface uses the provider palette (blue and gold).",
+    "tenantTitle": "Your document branding",
+    "tenantDescription": "Applied only to your own documents — invoices, quotes and letterheads. It never changes the AmisiBiz interface.",
+    "primary": "Primary colour",
+    "accent": "Accent colour",
+    "preview": "Document preview",
+    "sampleCompany": "Your Business Ltd",
+    "sampleDocTitle": "INVOICE",
+    "sampleDocNumber": "INV-0001",
+    "notYetEditable": "Editing your branding will be enabled in a later phase. The preview below uses sample values.",
+    "poweredBy": "Powered by AmisiBiz"
+  },
+  "admin": {
+    "badge": "Platform",
+    "title": "Platform administration",
+    "description": "Amisi Genuine Enterprises internal tools. Restricted to platform administrators.",
+    "nav": {
+      "overview": "Overview",
+      "tenants": "Tenants"
+    },
+    "overviewTitle": "Overview",
+    "tenantsTitle": "Tenants",
+    "tenantsDescription": "All business workspaces on AmisiBiz.",
+    "tenantsEmpty": "No tenants have been created yet.",
+    "recentChanges": "Recently changed",
+    "noRecent": "No tenants have been changed yet.",
+    "counts": {
+      "total": "Total",
+      "pending": "Pending",
+      "active": "Active",
+      "suspended": "Suspended"
+    },
+    "status": {
+      "PENDING": "Pending",
+      "ACTIVE": "Active",
+      "SUSPENDED": "Suspended"
+    },
+    "searchLabel": "Search",
+    "searchPlaceholder": "Search by name or slug",
+    "filterStatus": "Status",
+    "filterAll": "All statuses",
+    "applyFilters": "Apply",
+    "clearFilters": "Clear",
+    "view": "View",
+    "createTenant": "New tenant",
+    "noHostname": "Not configured",
+    "table": {
+      "name": "Name",
+      "slug": "Slug",
+      "hostname": "Hostname",
+      "status": "Status",
+      "created": "Created",
+      "actions": "Actions"
+    },
+    "create": {
+      "title": "Create tenant",
+      "description": "Provision a new customer workspace. It stays pending until activated.",
+      "cardTitle": "Organisation details",
+      "cardDescription": "Provisioning sets up default document settings, branding and a hostname mapping.",
+      "fieldName": "Organisation name",
+      "fieldSlug": "Workspace slug (optional)",
+      "fieldSlugHint": "Lowercase letters, numbers and hyphens. Generated from the name when omitted.",
+      "fieldOwnerEmail": "Owner email (optional)",
+      "fieldOwnerHint": "An owner invitation is issued; the recipient must accept it to become owner.",
+      "fieldCurrency": "Currency",
+      "fieldTimezone": "Timezone",
+      "fieldLocale": "Default locale",
+      "createSubmit": "Create tenant",
+      "creating": "Creating..."
+    },
+    "detail": {
+      "backToList": "Back to tenants",
+      "lifecycle": "Lifecycle",
+      "slugLabel": "Slug",
+      "hostname": "Hostname",
+      "createdAt": "Created",
+      "activatedAt": "Activated",
+      "suspendedAt": "Suspended",
+      "suspendedBy": "Suspended by",
+      "suspensionReason": "Suspension reason",
+      "plan": "Plan",
+      "members": "Members",
+      "country": "Country",
+      "currency": "Currency",
+      "timezone": "Timezone",
+      "locale": "Locale",
+      "never": "—",
+      "settingsTitle": "Document settings",
+      "brandingTitle": "Branding",
+      "documentPrefix": "Document prefix",
+      "quotationPrefix": "Quotation prefix",
+      "notFound": "Tenant not found."
+    },
+    "actions": {
+      "activate": "Activate",
+      "activateConfirm": "Activate this organisation? Its workspace becomes available to members.",
+      "suspend": "Suspend",
+      "suspendConfirmTitle": "Suspend organisation",
+      "suspendConfirm": "Suspension blocks all workspace access (read and write). Data is preserved and restored on reactivation.",
+      "suspensionReasonLabel": "Reason for suspension",
+      "suspensionReasonPlaceholder": "Explain why this organisation is being suspended",
+      "reactivate": "Reactivate",
+      "reactivateConfirm": "Reactivate this organisation? Workspace access is restored.",
+      "working": "Working…",
+      "cancel": "Cancel",
+      "reasonRequired": "A reason of at least 3 characters is required."
+    },
+    "noAccessTitle": "Administrator access required",
+    "noAccessDescription": "This area is restricted to platform administrators."
+  },
+  "states": {
+    "forbiddenTitle": "Access denied",
+    "forbiddenDescription": "You don't have permission to view this page.",
+    "unauthenticatedTitle": "Sign-in required",
+    "unauthenticatedDescription": "Please sign in to continue.",
+    "backHome": "Go to dashboard"
+  },
+  "onboarding": {
+    "title": "Set up your organisation",
+    "step1": "Organisation details",
+    "step2": "Preferences",
+    "step3": "Invite your team",
+    "completeButton": "Go to dashboard"
+  }
+}

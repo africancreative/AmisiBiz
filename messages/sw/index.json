@@ -1,0 +1,299 @@
+{
+  "common": {
+    "appName": "AmisiBiz",
+    "tagline": "Biashara iliyorahisishwa.",
+    "loading": "Inapakia...",
+    "save": "Hifadhi mabadiliko",
+    "cancel": "Ghairi",
+    "delete": "Futa",
+    "edit": "Hariri",
+    "back": "Rudi",
+    "next": "Endelea",
+    "submit": "Wasilisha",
+    "confirm": "Thibitisha",
+    "close": "Funga",
+    "search": "Tafuta...",
+    "noResults": "Hakuna matokeo.",
+    "error": "Hitilafu imetokea. Jaribu tena.",
+    "success": "Imekamilika!",
+    "required": "Inahitajika"
+  },
+  "nav": {
+    "dashboard": "Dashibodi",
+    "invoices": "Ankara",
+    "crm": "CRM",
+    "inventory": "Hesabu za bidhaa",
+    "hr": "Rasilimali Watu",
+    "payroll": "Mishahara",
+    "purchasing": "Manunuzi",
+    "accounting": "Uhasibu",
+    "reports": "Ripoti",
+    "documents": "Nyaraka",
+    "settings": "Mipangilio",
+    "team": "Timu",
+    "signOut": "Toka"
+  },
+  "auth": {
+    "login": {
+      "title": "Karibu tena",
+      "subtitle": "Ingia kwenye akaunti yako ya AmisiBiz",
+      "emailLabel": "Barua pepe",
+      "emailPlaceholder": "wewe@mfano.com",
+      "passwordLabel": "Nenosiri",
+      "passwordPlaceholder": "Nenosiri lako",
+      "forgotPassword": "Umesahau nenosiri?",
+      "submit": "Ingia",
+      "submitting": "Inaingia...",
+      "noAccount": "Huna akaunti?",
+      "registerLink": "Fungua akaunti",
+      "error": {
+        "invalid": "Barua pepe au nenosiri si sahihi.",
+        "suspended": "Akaunti yako imezuiwa. Wasiliana na usaidizi.",
+        "generic": "Kuingia kumeshindwa. Jaribu tena."
+      }
+    },
+    "register": {
+      "title": "Fungua akaunti yako",
+      "subtitle": "Fungua eneo la kazi la shirika lako kwenye AmisiBiz.",
+      "nameLabel": "Jina lako kamili",
+      "namePlaceholder": "Amisi Genuine",
+      "emailLabel": "Barua pepe ya kazi",
+      "emailPlaceholder": "wewe@kampuni.com",
+      "passwordLabel": "Nenosiri",
+      "passwordPlaceholder": "Angalau herufi 8",
+      "confirmPasswordLabel": "Thibitisha nenosiri",
+      "tenantNameLabel": "Jina la shirika",
+      "tenantNamePlaceholder": "Amisi Co. Ltd",
+      "submit": "Fungua akaunti",
+      "submitting": "Inafungua akaunti...",
+      "hasAccount": "Una akaunti tayari?",
+      "loginLink": "Ingia",
+      "successTitle": "Akaunti imefunguliwa!",
+      "successSubtitle": "Sasa unaweza kuingia kwenye AmisiBiz.",
+      "terms": "Kwa kufungua akaunti, unakubaliana na Masharti yetu ya Huduma na Sera ya Faragha."
+    },
+    "forgotPassword": {
+      "title": "Weka upya nenosiri lako",
+      "subtitle": "Ingiza barua pepe yako na tutakutumia kiungo cha kuweka upya.",
+      "emailLabel": "Barua pepe",
+      "submit": "Tuma kiungo",
+      "submitting": "Inatuma...",
+      "success": "Ikiwa akaunti ipo kwa barua pepe hiyo, kiungo cha kuweka upya kimetumwa.",
+      "backToLogin": "Rudi kuingia"
+    },
+    "resetPassword": {
+      "title": "Chagua nenosiri jipya",
+      "subtitle": "Weka nenosiri jipya kwa akaunti yako.",
+      "passwordLabel": "Nenosiri jipya",
+      "confirmPasswordLabel": "Thibitisha nenosiri jipya",
+      "submit": "Sasisha nenosiri",
+      "submitting": "Inasasisha...",
+      "success": "Nenosiri lako limesasishwa. Sasa unaweza kuingia.",
+      "invalidToken": "Kiungo hiki cha kuweka upya si sahihi au kimeisha muda.",
+      "backToLogin": "Rudi kuingia"
+    },
+    "verifyEmail": {
+      "title": "Uthibitishaji wa barua pepe",
+      "verifying": "Inathibitisha barua pepe yako...",
+      "success": "Barua pepe yako imethibitishwa.",
+      "error": "Kiungo hiki cha uthibitisho si sahihi au kimeisha muda.",
+      "backToLogin": "Rudi kuingia"
+    }
+  },
+  "dashboard": {
+    "welcome": "Karibu tena, {name}",
+    "overview": "Muhtasari",
+    "recentActivity": "Shughuli za hivi karibuni",
+    "quickActions": "Vitendo vya haraka",
+    "trial": {
+      "banner": "Uko kwenye jaribio la bure. Siku {days} zimebaki.",
+      "upgrade": "Boresha sasa"
+    }
+  },
+  "team": {
+    "title": "Timu",
+    "invite": "Alika mwanachama",
+    "members": "Wanachama",
+    "invitations": "Mialiko inayosubiri",
+    "role": "Jukumu",
+    "status": "Hali",
+    "actions": "Vitendo",
+    "removeConfirm": "Ondoa mwanachama huyu kutoka shirikani?",
+    "update": "Sasisha",
+    "remove": "Ondoa",
+    "inviteSuccess": "Mwaliko umetumwa.",
+    "roles": {
+      "BUSINESS_OWNER": "Mmiliki",
+      "BUSINESS_ADMIN": "Msimamizi",
+      "DOCUMENT_MANAGER": "Msimamizi wa Nyaraka",
+      "SALES_STAFF": "Mfanyakazi wa Mauzo",
+      "VIEWER": "Mtazamaji"
+    }
+  },
+  "workspace": {
+    "brandFallback": "Eneo la kazi",
+    "noWorkspaceTitle": "Hakuna eneo la kazi",
+    "noWorkspaceDescription": "Akaunti yako haijaunganishwa na eneo la kazi bado. Wasiliana na msimamizi wako au fungua moja.",
+    "signedInAs": "Umeingia kama",
+    "suspendedTitle": "Eneo la kazi halipatikani",
+    "suspendedDescription": "Eneo la kazi la shirika hili halipatikani kwa sasa. Wasiliana na msimamizi wako.",
+    "nav": {
+      "overview": "Muhtasari",
+      "contacts": "Watu",
+      "items": "Bidhaa",
+      "documents": "Nyaraka",
+      "branding": "Chapa",
+      "team": "Timu",
+      "dashboard": "Dashibodi"
+    }
+  },
+  "modules": {
+    "newButton": "Mpya",
+    "contacts": {
+      "title": "Watu",
+      "description": "Watu na kampuni ambazo biashara yako inashirikiana nazo.",
+      "emptyTitle": "Hakuna mtu bado",
+      "emptyDescription": "Watu unaowaongeza wataonekana hapa. Moduli ya CRM inakuja katika awamu ijayo."
+    },
+    "items": {
+      "title": "Bidhaa",
+      "description": "Bidhaa na huduma ambazo biashara yako inauza.",
+      "emptyTitle": "Hakuna bidhaa bado",
+      "emptyDescription": "Bidhaa za katalogi zitaonekana hapa. Moduli ya bidhaa inakuja katika awamu ijayo."
+    },
+    "documents": {
+      "title": "Nyaraka",
+      "description": "Nukuu, ankara na nyaraka nyingine za biashara.",
+      "emptyTitle": "Hakuna nyaraka bado",
+      "emptyDescription": "Nyaraka unazounda zitaonekana hapa. Moduli ya nyaraka inakuja katika awamu ijayo."
+    }
+  },
+  "branding": {
+    "title": "Chapa",
+    "description": "Sanidi rangi na nembo zinazotumika kwenye nyaraka zako mwenyewe.",
+    "providerTitle": "Chapa ya bidhaa",
+    "providerDescription": "AmisiBiz inatolewa na Amisi Genuine Enterprises. Kiolesura cha bidhaa kinatumia rangi za mtoa huduma (bluu na dhahabu).",
+    "tenantTitle": "Chapa ya nyaraka zako",
+    "tenantDescription": "Inatumika tu kwa nyaraka zako mwenyewe — ankara, nukuu na vichwa vya barua. Haiathiri kiolesura cha AmisiBiz.",
+    "primary": "Rangi kuu",
+    "accent": "Rangi ya lafudhi",
+    "preview": "Onyesho la nyaraka",
+    "sampleCompany": "Biashara Yako Ltd",
+    "sampleDocTitle": "ANKARA",
+    "sampleDocNumber": "ANK-0001",
+    "notYetEditable": "Kuhariri chapa yako kutawashwa katika awamu ijayo. Onyesho hapa chini linatumia thamani za mfano.",
+    "poweredBy": "Inaendeshwa na AmisiBiz"
+  },
+  "admin": {
+    "badge": "Jukwaa",
+    "title": "Usimamizi wa jukwaa",
+    "description": "Zana za ndani za Amisi Genuine Enterprises. Kwa wasimamizi wa jukwaa pekee.",
+    "nav": {
+      "overview": "Muhtasari",
+      "tenants": "Wateja"
+    },
+    "overviewTitle": "Muhtasari",
+    "tenantsTitle": "Wateja",
+    "tenantsDescription": "Eneo zote za kazi za biashara kwenye AmisiBiz.",
+    "tenantsEmpty": "Hakuna mteja aliyeundwa bado.",
+    "recentChanges": "Zilizobadilishwa hivi karibuni",
+    "noRecent": "Hakuna mteja aliyebadilishwa bado.",
+    "counts": {
+      "total": "Jumla",
+      "pending": "Zinasubiri",
+      "active": "Hai",
+      "suspended": "Zilizosimamishwa"
+    },
+    "status": {
+      "PENDING": "Inasubiri",
+      "ACTIVE": "Hai",
+      "SUSPENDED": "Imesimamishwa"
+    },
+    "searchLabel": "Tafuta",
+    "searchPlaceholder": "Tafuta kwa jina au kitambulisho",
+    "filterStatus": "Hali",
+    "filterAll": "Hali zote",
+    "applyFilters": "Tumia",
+    "clearFilters": "Futa",
+    "view": "Angalia",
+    "createTenant": "Mteja mpya",
+    "noHostname": "Haijasanidiwa",
+    "table": {
+      "name": "Jina",
+      "slug": "Kitambulisho",
+      "hostname": "Jina la mwenyeji",
+      "status": "Hali",
+      "created": "Iliundwa",
+      "actions": "Vitendo"
+    },
+    "create": {
+      "title": "Unda mteja",
+      "description": "Andaa eneo jipya la kazi la mteja. Linasubiri hadi liwashwe.",
+      "cardTitle": "Maelezo ya shirika",
+      "cardDescription": "Uandaaji huweka mipangilio ya hati, chapa na uhusiano wa jina la mwenyeji.",
+      "fieldName": "Jina la shirika",
+      "fieldSlug": "Kitambulisho cha eneo (si lazima)",
+      "fieldSlugHint": "Herufi ndogo, namba na vistari. Huzalishwa kutoka jina linapoachwa.",
+      "fieldOwnerEmail": "Barua pepe ya mmiliki (si lazima)",
+      "fieldOwnerHint": "Mwaliko wa umiliki hutumwa; mpokeaji lazima akubali ili kuwa mmiliki.",
+      "fieldCurrency": "Sarafu",
+      "fieldTimezone": "Eneo la saa",
+      "fieldLocale": "Lugha chaguo-msingi",
+      "createSubmit": "Unda mteja",
+      "creating": "Inaunda..."
+    },
+    "detail": {
+      "backToList": "Rudi kwa wateja",
+      "lifecycle": "Mzunguko wa maisha",
+      "slugLabel": "Kitambulisho",
+      "hostname": "Jina la mwenyeji",
+      "createdAt": "Iliundwa",
+      "activatedAt": "Iliwashwa",
+      "suspendedAt": "Ilisimamishwa",
+      "suspendedBy": "Ilisimamishwa na",
+      "suspensionReason": "Sababu ya kusimamisha",
+      "plan": "Mpango",
+      "members": "Wanachama",
+      "country": "Nchi",
+      "currency": "Sarafu",
+      "timezone": "Eneo la saa",
+      "locale": "Lugha",
+      "never": "—",
+      "settingsTitle": "Mipangilio ya hati",
+      "brandingTitle": "Chapa",
+      "documentPrefix": "Kiambishi cha hati",
+      "quotationPrefix": "Kiambishi cha nukuu",
+      "notFound": "Mteja hapatikani."
+    },
+    "actions": {
+      "activate": "Washa",
+      "activateConfirm": "Washa shirika hili? Eneo lake la kazi litapatikana kwa wanachama.",
+      "suspend": "Simamisha",
+      "suspendConfirmTitle": "Simamisha shirika",
+      "suspendConfirm": "Kusimamisha huzuia ufikiaji wote wa eneo la kazi (kusoma na kuandika). Data huhifadhiwa na hurejeshwa linapowashwa tena.",
+      "suspensionReasonLabel": "Sababu ya kusimamisha",
+      "suspensionReasonPlaceholder": "Eleza kwa nini shirika hili linasimamishwa",
+      "reactivate": "Washa tena",
+      "reactivateConfirm": "Washa shirika hili tena? Ufikiaji wa eneo la kazi utarejeshwa.",
+      "working": "Inafanya kazi…",
+      "cancel": "Ghairi",
+      "reasonRequired": "Sababu ya angalau herufi 3 inahitajika."
+    },
+    "noAccessTitle": "Uhitaji wa ufikiaji wa msimamizi",
+    "noAccessDescription": "Eneo hili ni kwa wasimamizi wa jukwaa pekee."
+  },
+  "states": {
+    "forbiddenTitle": "Ufikiaji umekataliwa",
+    "forbiddenDescription": "Huna ruhusa ya kuona ukurasa huu.",
+    "unauthenticatedTitle": "Inahitajika kuingia",
+    "unauthenticatedDescription": "Tafadhali ingia ili kuendelea.",
+    "backHome": "Nenda kwenye dashibodi"
+  },
+  "onboarding": {
+    "title": "Sanidi shirika lako",
+    "step1": "Maelezo ya shirika",
+    "step2": "Mapendeleo",
+    "step3": "Alika timu yako",
+    "completeButton": "Nenda kwenye dashibodi"
+  }
+}

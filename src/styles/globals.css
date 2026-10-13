@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * AmisiBiz design tokens.
+ *
+ * Two token layers, deliberately separated:
+ *
+ *  1. PROVIDER tokens (`:root`, prefixed conceptually with "provider"):
+ *     Amisi Genuine blue + gold. These drive the product UI.
+ *
+ *  2. TENANT tokens (`[data-tenant]` / inline CSS variables):
+ *     per-business branding used for that business's document letterheads.
+ *     Tenants may override the primary/accent colours, but the provider UI
+ *     chrome keeps its own identity.
+ *
+ * Stored as HSL channel triplets so Tailwind can apply opacity modifiers.
+ */
+@layer base {
+  :root {
+    /* Surfaces */
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+
+    /* Provider primary — Amisi blue */
+    --primary: 221 83% 45%;
+    --primary-foreground: 210 40% 98%;
+
+    /* Provider accent — Amisi gold */
+    --accent: 38 92% 50%;
+    --accent-foreground: 26 83% 14%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --success: 142 71% 45%;
+    --success-foreground: 144 61% 20%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 26 83% 14%;
+    --info: 199 89% 48%;
+    --info-foreground: 204 80% 16%;
+
+    --radius: 0.5rem;
+
+    /* Tenant branding defaults (overridable per workspace) */
+    --tenant-primary: 221 83% 45%;
+    --tenant-primary-foreground: 210 40% 98%;
+    --tenant-accent: 38 92% 50%;
+    --tenant-accent-foreground: 26 83% 14%;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  /* Consistent, visible focus for keyboard users. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  /* Legacy helpers retained for existing screens, now token-driven. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-primary {
+    @apply bg-primary text-primary-foreground hover:bg-primary/90;
+  }
+
+  .btn-secondary {
+    @apply border border-border bg-card text-foreground hover:bg-muted;
+  }
+
+  .input {
+    @apply block w-full rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:bg-muted;
+  }
+
+  .label {
+    @apply mb-1 block text-sm font-medium text-foreground;
+  }
+
+  .card {
+    @apply rounded-lg border border-border bg-card text-card-foreground shadow-sm;
+  }
+
+  .field-error {
+    @apply mt-1 text-xs text-destructive;
+  }
+}

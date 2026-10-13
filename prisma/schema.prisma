@@ -1,0 +1,528 @@
+// This is your Prisma schema file for AmisiBiz
+// Multi-tenant SaaS — Amisi Genuine Enterprises
+// Phase 1: Foundation — Auth, Tenants, RBAC
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+// Tenant lifecycle. A tenant is created PENDING (provisioned but not usable),
+// moves to ACTIVE only through the authorized platform activation workflow, and
+// may be SUSPENDED (data preserved) and later reactivated.
+enum TenantStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  INVITED
+  SUSPENDED
+}
+
+// Platform domain — Amisi Genuine internal staff. Kept strictly separate from
+// tenant roles: a platform role NEVER grants access to tenant business data.
+enum PlatformRole {
+  USER              // No platform privileges (default for all accounts)
+  PLATFORM_ADMIN    // Manages tenant activation/suspension
+  PLATFORM_SUPPORT  // Reserved — no permissions granted until a policy exists
+}
+
+// Tenant domain — roles within a customer's business workspace.
+// Deny-by-default: the schema default is the least-privileged role.
+enum TenantRole {
+  BUSINESS_OWNER    // Owns the workspace
+  BUSINESS_ADMIN    // Routine operations and settings
+  DOCUMENT_MANAGER  // Creates and manages business documents
+  SALES_STAFF       // Permitted contacts, catalogue items and sales documents
+  VIEWER            // Read-only access to explicitly permitted information
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+// Single-use, hashed tokens for email verification and password reset.
+enum AccountTokenPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+// ─── Tenant (Organisation) ────────────────────────────────────────────────────
+
+model Tenant {
+  id       String       @id @default(cuid()) // Immutable internal ID
+  name     String // Business display name
+  slug     String       @unique // URL-safe workspace slug e.g. "acme"
+  logoUrl  String?
+  status   TenantStatus @default(PENDING) // PENDING until activated
+  country  String? // ISO 3166-1 alpha-2
+  currency String       @default("KES") // ISO 4217
+  timezone String       @default("UTC")
+  locale   String       @default("en") // Default locale for tenant
+  planId   String? // Optional billing plan reference
+
+  // Lifecycle metadata (activation / suspension)
+  activatedAt      DateTime?
+  activatedById    String?
+  suspendedAt      DateTime?
+  suspendedById    String?
+  suspensionReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  activatedBy     User?           @relation("TenantActivatedBy", fields: [activatedById], references: [id], onDelete: SetNull)
+  suspendedBy     User?           @relation("TenantSuspendedBy", fields: [suspendedById], references: [id], onDelete: SetNull)
+  members         TenantMember[]
+  invitations     Invitation[]
+  auditLogs       AuditLog[]
+  settings        TenantSettings?
+  branding        TenantBranding?
+  domains         TenantDomain[]
+  contacts        Contact[]
+  taxCategories   TaxCategory[]
+  taxRates        TaxRate[]
+  items           Item[]
+  contactItems    ContactItem[]
+  documents       Document[]
+
+  @@index([slug])
+  @@index([status])
+  @@index([activatedById])
+  @@index([suspendedById])
+}
+
+// ─── Tenant settings (per-tenant configuration) ───────────────────────────────
+// Initialised with defaults on provisioning; document numbering is tenant-scoped.
+
+model TenantSettings {
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  documentPrefix     String   @default("INV")
+  documentNextNumber Int      @default(1)
+  quotationPrefix    String   @default("QUO")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ─── Tenant branding (used on the tenant's own documents only) ────────────────
+
+model TenantBranding {
+  id                    String   @id @default(cuid())
+  tenantId              String   @unique
+  displayName           String?
+  registeredName        String?
+  primaryColor          String   @default("#1d4ed8")
+  secondaryColor        String   @default("#1e3a5f")
+  accentColor           String   @default("#f59e0b")
+  primaryForeground     String   @default("#f8fafc")
+  logoUrl               String?
+  contactEmail          String?
+  contactPhone          String?
+  postalAddress         String?
+  physicalAddress       String?
+  website               String?
+  taxPin                String?
+  currency              String   @default("KES")
+  defaultFooter         String?
+  paymentInstructions   String?
+  documentLayout        String   @default("standard")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ─── Tenant hostname mapping (subdomain routing) ──────────────────────────────
+// Maps a full hostname (e.g. "acme.amisigenuine.com") to a tenant. Multiple
+// hostnames may map to one tenant; exactly one should be primary.
+
+model TenantDomain {
+  id         String    @id @default(cuid())
+  tenantId   String
+  hostname   String    @unique
+  isPrimary  Boolean   @default(false)
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([hostname])
+}
+
+// ─── Contact types ────────────────────────────────────────────────────────────
+
+enum ContactType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+enum ContactStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+// ─── Tax configuration (explicit, not implicit) ───────────────────────────────
+
+model TaxCategory {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String   // e.g. "VAT", "WHT", "EXEMPT"
+  description String?
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant  Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rates   TaxRate[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model TaxRate {
+  id            String   @id @default(cuid())
+  tenantId      String
+  categoryId    String
+  name          String   // e.g. "VAT 16%"
+  rate          Decimal  @db.Decimal(5, 4) // e.g. 0.1600 for 16%
+  effectiveFrom DateTime @default(now())
+  effectiveTo   DateTime?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category  TaxCategory  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  items     Item[]
+
+  @@unique([tenantId, categoryId, name, effectiveFrom])
+  @@index([tenantId])
+  @@index([categoryId])
+  @@index([effectiveFrom])
+}
+
+// ─── Contacts CRM ─────────────────────────────────────────────────────────────
+
+model Contact {
+  id              String       @id @default(cuid())
+  tenantId        String
+  type            ContactType  @default(INDIVIDUAL)
+  status          ContactStatus @default(ACTIVE)
+  firstName       String?
+  lastName        String?
+  companyName     String?
+  email           String?
+  phone           String?
+  mobile          String?
+  taxPin          String?
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  archivedAt      DateTime?
+
+  tenant       Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  addresses    ContactAddress[]
+  contactItems ContactItem[]
+  documents    Document[]      // Future: document history
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, email])
+  @@index([tenantId, phone])
+  @@index([tenantId, companyName])
+  @@index([tenantId, createdAt])
+}
+
+model ContactAddress {
+  id            String   @id @default(cuid())
+  contactId     String
+  type          String   // "POSTAL" | "PHYSICAL"
+  line1         String
+  line2         String?
+  city          String?
+  state         String?
+  postalCode    String?
+  country       String?  // ISO 3166-1 alpha-2
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@index([contactId, type])
+}
+
+// ─── Items & Services Catalogue ───────────────────────────────────────────────
+
+enum ItemType {
+  PRODUCT
+  SERVICE
+}
+
+enum ItemStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Item {
+  id            String     @id @default(cuid())
+  tenantId      String
+  type          ItemType   @default(PRODUCT)
+  status        ItemStatus @default(ACTIVE)
+  name          String
+  sku           String?
+  description   String?
+  unitOfMeasure String     @default("each")
+  unitPrice     Decimal    @db.Decimal(18, 4) // Minor-unit model: stored as major units with 4dp precision
+  currency      String     @default("KES")
+  taxRateId     String?
+  notes         String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  taxRate   TaxRate?   @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  contactItems ContactItem[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@index([tenantId, name])
+}
+
+// ─── Customer-specific item catalogue ─────────────────────────────────────────
+
+model ContactItem {
+  id              String   @id @default(cuid())
+  tenantId        String
+  contactId       String
+  itemId          String
+  customCode      String?  // Customer-specific item code
+  customName      String?  // Customer-specific description
+  agreedPrice     Decimal  @db.Decimal(18, 4) // Override price for this customer
+  discountPercent Decimal  @default(0) @db.Decimal(5, 2) // e.g. 10.00 for 10%
+  isAvailable     Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  item    Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, contactId, itemId])
+  @@index([tenantId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, itemId])
+}
+
+// ─── Future: Documents (placeholder for document history) ─────────────────────
+
+model Document {
+  id          String   @id @default(cuid())
+  tenantId    String
+  contactId   String?
+  type        String   // "INVOICE", "QUOTE", etc.
+  number      String
+  status      String   // "DRAFT", "ISSUED", "VOID"
+  total       Decimal  @db.Decimal(18, 4)
+  currency    String
+  issuedAt    DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, type, number])
+  @@index([tenantId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, status])
+  @@index([tenantId, issuedAt])
+}
+
+// ─── Auth.js Required Tables ──────────────────────────────────────────────────
+
+model User {
+  id            String       @id @default(cuid())
+  name          String?
+  email         String       @unique
+  emailVerified DateTime?
+  image         String?
+  password      String?      // bcrypt hash — nullable for OAuth users
+  platformRole  PlatformRole @default(USER)
+  status        UserStatus   @default(ACTIVE)
+  // Incremented to revoke every existing JWT session for this user
+  // (password change, forced logout, membership/role compromise).
+  sessionVersion Int         @default(0)
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  // Auth.js relations
+  accounts      Account[]
+  sessions      Session[]
+
+  // Application relations
+  tenantMemberships TenantMember[]
+  auditLogs         AuditLog[]
+  accountTokens     AccountToken[]
+  tenantsActivated  Tenant[]       @relation("TenantActivatedBy")
+  tenantsSuspended  Tenant[]       @relation("TenantSuspendedBy")
+
+  @@index([email])
+  @@index([platformRole])
+  @@index([sessionVersion])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Single-use account tokens (email verification, password reset) ───────────
+// Only a SHA-256 hash of the token is persisted; the raw value lives solely in
+// the email link. Tokens are single-use (usedAt) and time-boxed (expiresAt).
+
+model AccountToken {
+  id        String              @id @default(cuid())
+  userId    String
+  purpose   AccountTokenPurpose
+  tokenHash String              @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime            @default(now())
+
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+}
+
+// ─── Tenant Membership (many-to-many User ↔ Tenant) ──────────────────────────
+
+model TenantMember {
+  id         String     @id @default(cuid())
+  tenantId   String
+  userId     String
+  role       TenantRole @default(VIEWER)
+  isDefault  Boolean    @default(false) // Which tenant is active when user logs in
+  joinedAt   DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@index([tenantId])
+}
+
+// ─── Invitations ──────────────────────────────────────────────────────────────
+// Only a SHA-256 hash of the token is persisted; the raw token is sent via email.
+
+model Invitation {
+  id         String           @id @default(cuid())
+  tenantId   String
+  email      String
+  role       TenantRole       @default(VIEWER)
+  tokenHash  String           @unique // SHA-256 hash of the invitation token
+  status     InvitationStatus @default(PENDING)
+  invitedBy  String           // userId of inviter
+  expiresAt  DateTime
+  acceptedAt DateTime?
+
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@index([tokenHash])
+  @@index([tenantId])
+  @@index([email])
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String?  // null for system-level events
+  userId     String?  // null for system events
+  action     String   // e.g. "tenant.created", "user.invited", "invoice.approved"
+  resource   String?  // e.g. "Invoice", "User"
+  resourceId String?  // ID of the affected record
+  metadata   Json?    // Additional context (sanitised, no PII unless required)
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}

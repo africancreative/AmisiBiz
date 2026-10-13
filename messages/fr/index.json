@@ -1,0 +1,299 @@
+{
+  "common": {
+    "appName": "AmisiBiz",
+    "tagline": "La gestion d'entreprise simplifiée.",
+    "loading": "Chargement...",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "delete": "Supprimer",
+    "edit": "Modifier",
+    "back": "Retour",
+    "next": "Suivant",
+    "submit": "Soumettre",
+    "confirm": "Confirmer",
+    "close": "Fermer",
+    "search": "Rechercher...",
+    "noResults": "Aucun résultat trouvé.",
+    "error": "Une erreur s'est produite. Veuillez réessayer.",
+    "success": "Fait!",
+    "required": "Requis"
+  },
+  "nav": {
+    "dashboard": "Tableau de bord",
+    "invoices": "Factures",
+    "crm": "CRM",
+    "inventory": "Inventaire",
+    "hr": "Ressources humaines",
+    "payroll": "Paie",
+    "purchasing": "Achats",
+    "accounting": "Comptabilité",
+    "reports": "Rapports",
+    "documents": "Documents",
+    "settings": "Paramètres",
+    "team": "Équipe",
+    "signOut": "Se déconnecter"
+  },
+  "auth": {
+    "login": {
+      "title": "Bon retour",
+      "subtitle": "Connectez-vous à votre compte AmisiBiz",
+      "emailLabel": "Adresse e-mail",
+      "emailPlaceholder": "vous@exemple.com",
+      "passwordLabel": "Mot de passe",
+      "passwordPlaceholder": "Votre mot de passe",
+      "forgotPassword": "Mot de passe oublié?",
+      "submit": "Se connecter",
+      "submitting": "Connexion en cours...",
+      "noAccount": "Vous n'avez pas de compte?",
+      "registerLink": "Créer un compte",
+      "error": {
+        "invalid": "E-mail ou mot de passe invalide.",
+        "suspended": "Votre compte a été suspendu. Contactez le support.",
+        "generic": "Échec de la connexion. Veuillez réessayer."
+      }
+    },
+    "register": {
+      "title": "Créer votre compte",
+      "subtitle": "Créez l'espace de travail de votre organisation sur AmisiBiz.",
+      "nameLabel": "Votre nom complet",
+      "namePlaceholder": "Amisi Genuine",
+      "emailLabel": "E-mail professionnel",
+      "emailPlaceholder": "vous@entreprise.com",
+      "passwordLabel": "Mot de passe",
+      "passwordPlaceholder": "Min. 8 caractères",
+      "confirmPasswordLabel": "Confirmer le mot de passe",
+      "tenantNameLabel": "Nom de l'organisation",
+      "tenantNamePlaceholder": "Amisi Co. Ltd",
+      "submit": "Créer un compte",
+      "submitting": "Création en cours...",
+      "hasAccount": "Vous avez déjà un compte?",
+      "loginLink": "Se connecter",
+      "successTitle": "Compte créé!",
+      "successSubtitle": "Vous pouvez maintenant vous connecter à AmisiBiz.",
+      "terms": "En créant un compte, vous acceptez nos Conditions d'utilisation et notre Politique de confidentialité."
+    },
+    "forgotPassword": {
+      "title": "Réinitialiser votre mot de passe",
+      "subtitle": "Entrez votre e-mail et nous vous enverrons un lien de réinitialisation.",
+      "emailLabel": "Adresse e-mail",
+      "submit": "Envoyer le lien",
+      "submitting": "Envoi en cours...",
+      "success": "Si un compte existe pour cet e-mail, un lien de réinitialisation a été envoyé.",
+      "backToLogin": "Retour à la connexion"
+    },
+    "resetPassword": {
+      "title": "Choisir un nouveau mot de passe",
+      "subtitle": "Entrez un nouveau mot de passe pour votre compte.",
+      "passwordLabel": "Nouveau mot de passe",
+      "confirmPasswordLabel": "Confirmer le nouveau mot de passe",
+      "submit": "Mettre à jour",
+      "submitting": "Mise à jour...",
+      "success": "Votre mot de passe a été mis à jour. Vous pouvez maintenant vous connecter.",
+      "invalidToken": "Ce lien de réinitialisation est invalide ou a expiré.",
+      "backToLogin": "Retour à la connexion"
+    },
+    "verifyEmail": {
+      "title": "Vérification de l'e-mail",
+      "verifying": "Vérification de votre adresse e-mail...",
+      "success": "Votre adresse e-mail a été vérifiée.",
+      "error": "Ce lien de vérification est invalide ou a expiré.",
+      "backToLogin": "Retour à la connexion"
+    }
+  },
+  "dashboard": {
+    "welcome": "Bon retour, {name}",
+    "overview": "Aperçu",
+    "recentActivity": "Activité récente",
+    "quickActions": "Actions rapides",
+    "trial": {
+      "banner": "Vous êtes en période d'essai. {days} jours restants.",
+      "upgrade": "Mettre à niveau"
+    }
+  },
+  "team": {
+    "title": "Équipe",
+    "invite": "Inviter un membre",
+    "members": "Membres",
+    "invitations": "Invitations en attente",
+    "role": "Rôle",
+    "status": "Statut",
+    "actions": "Actions",
+    "removeConfirm": "Retirer ce membre de l'organisation?",
+    "update": "Mettre à jour",
+    "remove": "Retirer",
+    "inviteSuccess": "Invitation envoyée avec succès.",
+    "roles": {
+      "BUSINESS_OWNER": "Propriétaire",
+      "BUSINESS_ADMIN": "Administrateur",
+      "DOCUMENT_MANAGER": "Gestionnaire de documents",
+      "SALES_STAFF": "Personnel commercial",
+      "VIEWER": "Lecteur"
+    }
+  },
+  "workspace": {
+    "brandFallback": "Espace de travail",
+    "noWorkspaceTitle": "Aucun espace de travail disponible",
+    "noWorkspaceDescription": "Votre compte n'est pas encore associé à un espace de travail. Contactez votre administrateur ou créez-en un.",
+    "signedInAs": "Connecté en tant que",
+    "suspendedTitle": "Espace de travail indisponible",
+    "suspendedDescription": "L'espace de travail de cette organisation est actuellement indisponible. Contactez votre administrateur.",
+    "nav": {
+      "overview": "Aperçu",
+      "contacts": "Contacts",
+      "items": "Articles",
+      "documents": "Documents",
+      "branding": "Image de marque",
+      "team": "Équipe",
+      "dashboard": "Tableau de bord"
+    }
+  },
+  "modules": {
+    "newButton": "Nouveau",
+    "contacts": {
+      "title": "Contacts",
+      "description": "Les personnes et entreprises avec lesquelles vous travaillez.",
+      "emptyTitle": "Aucun contact pour l'instant",
+      "emptyDescription": "Les contacts que vous ajouterez apparaîtront ici. Le module CRM arrive dans une phase ultérieure."
+    },
+    "items": {
+      "title": "Articles",
+      "description": "Les produits et services que votre entreprise vend.",
+      "emptyTitle": "Aucun article pour l'instant",
+      "emptyDescription": "Les articles du catalogue apparaîtront ici. Le module articles arrive dans une phase ultérieure."
+    },
+    "documents": {
+      "title": "Documents",
+      "description": "Devis, factures et autres documents commerciaux.",
+      "emptyTitle": "Aucun document pour l'instant",
+      "emptyDescription": "Les documents que vous créez apparaîtront ici. Le module documents arrive dans une phase ultérieure."
+    }
+  },
+  "branding": {
+    "title": "Image de marque",
+    "description": "Configurez les couleurs et le logo utilisés sur vos propres documents.",
+    "providerTitle": "Image de marque du produit",
+    "providerDescription": "AmisiBiz est fourni par Amisi Genuine Enterprises. L'interface du produit utilise la palette du fournisseur (bleu et or).",
+    "tenantTitle": "Image de marque de vos documents",
+    "tenantDescription": "Appliquée uniquement à vos propres documents — factures, devis et en-têtes. Elle ne modifie jamais l'interface AmisiBiz.",
+    "primary": "Couleur principale",
+    "accent": "Couleur d'accent",
+    "preview": "Aperçu du document",
+    "sampleCompany": "Votre Entreprise SARL",
+    "sampleDocTitle": "FACTURE",
+    "sampleDocNumber": "FAC-0001",
+    "notYetEditable": "La modification de votre image de marque sera activée dans une phase ultérieure. L'aperçu ci-dessous utilise des valeurs d'exemple.",
+    "poweredBy": "Propulsé par AmisiBiz"
+  },
+  "admin": {
+    "badge": "Plateforme",
+    "title": "Administration de la plateforme",
+    "description": "Outils internes d'Amisi Genuine Enterprises. Réservé aux administrateurs de la plateforme.",
+    "nav": {
+      "overview": "Aperçu",
+      "tenants": "Locataires"
+    },
+    "overviewTitle": "Aperçu",
+    "tenantsTitle": "Locataires",
+    "tenantsDescription": "Tous les espaces de travail d'entreprise sur AmisiBiz.",
+    "tenantsEmpty": "Aucun locataire n'a encore été créé.",
+    "recentChanges": "Modifiés récemment",
+    "noRecent": "Aucun locataire n'a encore été modifié.",
+    "counts": {
+      "total": "Total",
+      "pending": "En attente",
+      "active": "Actifs",
+      "suspended": "Suspendus"
+    },
+    "status": {
+      "PENDING": "En attente",
+      "ACTIVE": "Actif",
+      "SUSPENDED": "Suspendu"
+    },
+    "searchLabel": "Rechercher",
+    "searchPlaceholder": "Rechercher par nom ou identifiant",
+    "filterStatus": "Statut",
+    "filterAll": "Tous les statuts",
+    "applyFilters": "Appliquer",
+    "clearFilters": "Effacer",
+    "view": "Voir",
+    "createTenant": "Nouveau locataire",
+    "noHostname": "Non configuré",
+    "table": {
+      "name": "Nom",
+      "slug": "Identifiant",
+      "hostname": "Nom d'hôte",
+      "status": "Statut",
+      "created": "Créé",
+      "actions": "Actions"
+    },
+    "create": {
+      "title": "Créer un locataire",
+      "description": "Provisionnez un nouvel espace de travail client. Il reste en attente jusqu'à son activation.",
+      "cardTitle": "Détails de l'organisation",
+      "cardDescription": "Le provisionnement définit les paramètres de documents, l'image de marque et la correspondance de nom d'hôte.",
+      "fieldName": "Nom de l'organisation",
+      "fieldSlug": "Identifiant de l'espace (facultatif)",
+      "fieldSlugHint": "Lettres minuscules, chiffres et tirets. Généré à partir du nom si omis.",
+      "fieldOwnerEmail": "E-mail du propriétaire (facultatif)",
+      "fieldOwnerHint": "Une invitation de propriétaire est émise; le destinataire doit l'accepter pour devenir propriétaire.",
+      "fieldCurrency": "Devise",
+      "fieldTimezone": "Fuseau horaire",
+      "fieldLocale": "Langue par défaut",
+      "createSubmit": "Créer le locataire",
+      "creating": "Création..."
+    },
+    "detail": {
+      "backToList": "Retour aux locataires",
+      "lifecycle": "Cycle de vie",
+      "slugLabel": "Identifiant",
+      "hostname": "Nom d'hôte",
+      "createdAt": "Créé",
+      "activatedAt": "Activé",
+      "suspendedAt": "Suspendu",
+      "suspendedBy": "Suspendu par",
+      "suspensionReason": "Motif de suspension",
+      "plan": "Forfait",
+      "members": "Membres",
+      "country": "Pays",
+      "currency": "Devise",
+      "timezone": "Fuseau horaire",
+      "locale": "Langue",
+      "never": "—",
+      "settingsTitle": "Paramètres des documents",
+      "brandingTitle": "Image de marque",
+      "documentPrefix": "Préfixe des documents",
+      "quotationPrefix": "Préfixe des devis",
+      "notFound": "Locataire introuvable."
+    },
+    "actions": {
+      "activate": "Activer",
+      "activateConfirm": "Activer cette organisation? Son espace de travail deviendra accessible aux membres.",
+      "suspend": "Suspendre",
+      "suspendConfirmTitle": "Suspendre l'organisation",
+      "suspendConfirm": "La suspension bloque tout accès à l'espace de travail (lecture et écriture). Les données sont conservées et restaurées lors de la réactivation.",
+      "suspensionReasonLabel": "Motif de la suspension",
+      "suspensionReasonPlaceholder": "Expliquez pourquoi cette organisation est suspendue",
+      "reactivate": "Réactiver",
+      "reactivateConfirm": "Réactiver cette organisation? L'accès à l'espace de travail sera rétabli.",
+      "working": "En cours…",
+      "cancel": "Annuler",
+      "reasonRequired": "Un motif d'au moins 3 caractères est requis."
+    },
+    "noAccessTitle": "Accès administrateur requis",
+    "noAccessDescription": "Cette zone est réservée aux administrateurs de la plateforme."
+  },
+  "states": {
+    "forbiddenTitle": "Accès refusé",
+    "forbiddenDescription": "Vous n'avez pas la permission de consulter cette page.",
+    "unauthenticatedTitle": "Connexion requise",
+    "unauthenticatedDescription": "Veuillez vous connecter pour continuer.",
+    "backHome": "Aller au tableau de bord"
+  },
+  "onboarding": {
+    "title": "Configurer votre organisation",
+    "step1": "Détails de l'organisation",
+    "step2": "Préférences",
+    "step3": "Inviter votre équipe",
+    "completeButton": "Aller au tableau de bord"
+  }
+}
