@@ -26,7 +26,8 @@ branding, contacts CRM and catalogue are implemented, tested and deployed
 against the live Supabase project; the documents schema layer is deployed
 (engine/PDF/UI pending). On top of that, the owner-directed **application
 foundation** (Turborepo monorepo, seven shared packages, Capacitor/Tauri
-scaffolds, CI workflow) is **executed but uncommitted**.
+scaffolds, CI workflow) is **executed** (committed later as `f0dfe59`; it was
+uncommitted when this audit was written).
 
 Headline findings:
 
@@ -57,7 +58,7 @@ Phase 03.5 audit) → `ed030c7` (**HEAD**, Supabase Auth swap, Phase 04.5a).
 Branch `main`; no remote push of the restructure; **no commits were created by
 this work session**.
 
-Working-tree state (restructure uncommitted):
+Working-tree state at audit time (restructure then uncommitted, now `f0dfe59`):
 
 | Bucket                 | Count | Content                                                                |
 | ---------------------- | ----- | ---------------------------------------------------------------------- |
@@ -307,8 +308,9 @@ these updates from this audit:
   next push, and the migration-drift job stays Phase 08.
 - **S8: resolved** — the README no longer references `AUTH_*`; template env
   vars were already clean after 04.5a.
-- **New — restructure uncommitted:** the entire foundation is uncommitted;
-  its revert path is the working tree. Owner commit approval pending.
+- **New — restructure uncommitted → RESOLVED 2026-10-14:** the owner approved a
+  two-commit split and the foundation is now in `f0dfe59` (Phase 2 in `b6bbea1`).
+  Still open: there is no remote, so no off-machine copy and no CI run.
 - **New — line endings:** Git reports LF→CRLF normalization on Windows
   checkouts; cosmetic, but agree a `.gitattributes` policy alongside the
   commit (owner decision).
@@ -323,19 +325,19 @@ now; live two-tenant RLS test exists but is DB-gated.
 
 Phases and status (canonical detail: `phase-checklist.md`):
 
-| Phase                                               | Status                                                      |
-| --------------------------------------------------- | ----------------------------------------------------------- |
-| 00 — Repository audit                               | **COMPLETE (this document)**                                |
-| 01 — Application foundation (owner directive)       | **Executed, uncommitted** — `phase-01-foundation-report.md` |
-| 04.5a — Supabase Auth swap                          | Complete, deployed (`ed030c7`)                              |
-| 04.5b — Turborepo monorepo + packages + shells + CI | Executed, uncommitted (this restructure)                    |
-| 04.5c — shadcn/ui for new UI                        | Not started                                                 |
-| 04.5d — Offline architecture design                 | Not started (design doc only, before any client code)       |
-| 04.5e — DPO / eTIMS interface design                | Not started (design doc only)                               |
-| 05 — Document engine, lifecycle, PDF, UI            | Schema deployed; implementation paused                      |
-| 07 — Audit viewer & observability                   | Not started                                                 |
-| 08 — Hardening, deployment, CI drift job            | Not started                                                 |
-| Post-08 — Client implementation                     | Owner-gated after 04.5d                                     |
+| Phase                                               | Status                                                              |
+| --------------------------------------------------- | ------------------------------------------------------------------- |
+| 00 — Repository audit                               | **COMPLETE (this document)**                                        |
+| 01 — Application foundation (owner directive)       | **Executed, committed `f0dfe59`** — `phase-01-foundation-report.md` |
+| 04.5a — Supabase Auth swap                          | Complete, deployed (`ed030c7`)                                      |
+| 04.5b — Turborepo monorepo + packages + shells + CI | Executed, committed in `f0dfe59` (this restructure)                 |
+| 04.5c — shadcn/ui for new UI                        | Not started                                                         |
+| 04.5d — Offline architecture design                 | Not started (design doc only, before any client code)               |
+| 04.5e — DPO / eTIMS interface design                | Not started (design doc only)                                       |
+| 05 — Document engine, lifecycle, PDF, UI            | Schema deployed; implementation paused                              |
+| 07 — Audit viewer & observability                   | Not started                                                         |
+| 08 — Hardening, deployment, CI drift job            | Not started                                                         |
+| Post-08 — Client implementation                     | Owner-gated after 04.5d                                             |
 
 Acceptance checklist (Phase 0 directive) — all met:
 

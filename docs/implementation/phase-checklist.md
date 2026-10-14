@@ -537,7 +537,8 @@ authorization, RBAC and RLS). Below, "Phase 1 directive" always means the last
 one. Its design record is `phase-01-security-design.md`; its status is
 `../architecture/security-model.md` §13.
 
-**Completed this cycle (all uncommitted; owner commit approval pending — task #30):**
+**Completed this cycle (committed 2026-10-14 as `f0dfe59` + `b6bbea1` on `main`;
+no remote push — task #30 closed by the owner's two-commit approval):**
 
 - Phase 0 audit, 04.5a (Supabase Auth, deployed as `ed030c7`) and 04.5b
   (monorepo + shared packages + client shells + CI) remain as recorded in

@@ -478,7 +478,8 @@ for the deployed app (task #38).
 
 One evidence caveat worth stating plainly: the behavioral RLS battery that
 produced the "offline" results above (67 assertions, run against a throwaway
-local cluster) currently exists only as an uncommitted scratch file. The
+local cluster) currently exists only as a git-ignored scratch file under `.tmp/`
+(committing the work did not commit that battery — that is task #37). The
 committed `apps/web/prisma/scripts/phase01-migration-checks.sql` covers the
 structural side (policies present, grants narrowed, helpers executable) with
 some role-switched checks, but the cross-tenant read/write behaviour is not yet

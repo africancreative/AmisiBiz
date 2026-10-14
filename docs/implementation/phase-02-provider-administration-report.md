@@ -4,8 +4,9 @@
   constitution, owner pack of 2026-10-14).
 - **Executed:** 2026-10-14. **Tasks:** #41 (schema + catalog), #42 (server
   operations + suspension split), #43 (UI + i18n), #44 (tests), #45 (docs + gates).
-- **State:** code-complete, all repository gates green, **uncommitted** (owner
-  commit approval pending — task #30) and **not applied to the live Supabase
+- **State:** code-complete, all repository gates green, **committed locally as
+  `b6bbea1`** (the owner approved a two-commit split on 2026-10-14; nothing has
+  been pushed to a remote) and **not applied to the live Supabase
   project** (migration 11 is authored; deploying to the shared project needs the
   owner's explicit go-ahead).
 - **Read with:** `../administration/provider-console.md` (administrator
@@ -223,8 +224,9 @@ Fresh clean-room chain, `sh .tmp/phase2_chain.sh p2_final`, re-run for this repo
    UI says so; production registration must stay disabled.
 7. **No rate limiting behind the console** (distributed store is a Phase 08 item)
    and no bulk lifecycle operations by design.
-8. **Uncommitted:** the whole Phase 2 surface plus the earlier foundation and
-   Phase 1 work await the owner's commit decision (#30).
+8. **Committed locally, not pushed:** Phase 2 is `b6bbea1` on `main` alongside the
+   foundation and Phase 1 work in `f0dfe59` (owner approval, 2026-10-14). There is
+   no remote, so CI has never run on GitHub and there is no off-machine copy.
 
 ## 7. Next phase
 

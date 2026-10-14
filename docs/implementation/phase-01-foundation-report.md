@@ -1,7 +1,8 @@
 # Phase 1 (owner directive) — Application foundation: execution record
 
-- **Status:** Executed 2026-10-14; **uncommitted** (staged + working tree) —
-  subject of the Phase 0 audit and awaiting the owner's commit decision.
+- **Status:** Executed 2026-10-14; **committed as `f0dfe59`** on 2026-10-14 after
+  the owner approved a two-commit split (no remote push). Was the subject of the
+  Phase 0 audit while it sat in the working tree.
 - **Directive:** "Implement Phase 1 of AmisiBiz: establish the application
   foundation" — workspaces `apps/web`, `apps/mobile`, `apps/desktop`,
   `packages/{domain,database,auth,ui,documents,sync}`, with strict TS,
@@ -80,4 +81,5 @@ in this environment**:
   is far future.
 - Vercel is not configured and no deployment was performed.
 - RLS remains inert; offline/SQLite and DPO/eTIMS are design-gated (04.5d/04.5e).
-- Everything above is **uncommitted**; the commit is the owner's decision.
+- Everything above was the owner's to commit, and is now in `f0dfe59`; no remote
+  push has been made.

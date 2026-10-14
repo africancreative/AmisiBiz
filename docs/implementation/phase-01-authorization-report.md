@@ -11,8 +11,9 @@
   switched on. Remaining work as the owner stated it: #35 scoped context →
   the operator step (strong `amisibiz_app` password, out of band) → live
   verification probes **with the owner's go-ahead**.
-- **Status:** tasks #31–#35 and #40 complete. **#36–#39 open.** Nothing in this
-  phase is committed — the commit decision is the owner's (task #30).
+- **Status:** tasks #31–#35 and #40 complete. **#36–#39 open.** This phase is
+  committed in `f0dfe59` (owner approval, 2026-10-14); the push decision and the
+  live verification remain the owner's (#30 closed, #38 open).
 
 ---
 
@@ -161,8 +162,9 @@ tasks #11–#15 remain closed.
 5. **Branding stays on the filesystem** (owner carve-out, 2026-10-14) even though
    migration 10 ships the bucket and its policies — adoption is #36, and today's
    storage isolation claim is schema-only.
-6. **No commit was made.** Foundation + Phase 1 changes sit in the working tree
-   for the owner to review (#30). `.gitignore` now also covers `.tmp/` and
+6. **No commit was made during this phase.** Foundation + Phase 1 changes sat in
+   the working tree for the owner to review; the owner approved the commit on
+   2026-10-14 (`f0dfe59`). `.gitignore` now also covers `.tmp/` and
    `.kilo/` so scratch logs (which can carry hostnames) cannot be staged by
    accident.
 
