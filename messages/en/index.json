@@ -168,6 +168,44 @@
       "emptyDescription": "Documents you create will appear here. The documents module arrives in a later phase."
     }
   },
+  "documentEnums": {
+    "type": {
+      "QUOTATION": "Quotation",
+      "INVOICE": "Invoice",
+      "DELIVERY_NOTE": "Delivery note"
+    },
+    "status": {
+      "DRAFT": "Draft",
+      "ISSUED": "Issued",
+      "ACCEPTED": "Accepted",
+      "REJECTED": "Rejected",
+      "EXPIRED": "Expired",
+      "CANCELLED": "Cancelled",
+      "PARTIALLY_PAID": "Partially paid",
+      "PAID": "Paid",
+      "OVERDUE": "Overdue",
+      "VOID": "Voided",
+      "PARTIALLY_DELIVERED": "Partially delivered",
+      "DELIVERED": "Delivered"
+    },
+    "periodStyle": {
+      "NONE": "No period",
+      "CALENDAR_YEAR": "Calendar year",
+      "FINANCIAL_YEAR": "Financial year"
+    },
+    "paymentMethod": {
+      "CASH": "Cash",
+      "BANK_TRANSFER": "Bank transfer",
+      "MOBILE_MONEY": "Mobile money",
+      "CARD": "Card",
+      "CHEQUE": "Cheque",
+      "OTHER": "Other"
+    },
+    "discountType": {
+      "PERCENT": "Percent",
+      "AMOUNT": "Amount"
+    }
+  },
   "branding": {
     "title": "Branding",
     "description": "Configure the colours and logo used on your own documents.",
@@ -259,10 +297,10 @@
       "timezone": "Timezone",
       "locale": "Locale",
       "never": "—",
-      "settingsTitle": "Document settings",
+      "settingsTitle": "Document numbering",
+      "numberingEmpty": "No numbering series configured.",
+      "numberingDigits": "{count} digits",
       "brandingTitle": "Branding",
-      "documentPrefix": "Document prefix",
-      "quotationPrefix": "Quotation prefix",
       "notFound": "Tenant not found."
     },
     "actions": {

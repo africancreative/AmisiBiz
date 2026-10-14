@@ -20,6 +20,7 @@ export default async function TenantDetailPage({
 }) {
   const { locale, id } = await params;
   const t = await getTranslations("admin");
+  const tEnums = await getTranslations("documentEnums");
   const tenant = await getTenantDetail(id);
 
   if (!tenant) {
@@ -127,23 +128,32 @@ export default async function TenantDetailPage({
             <CardTitle>{t("detail.settingsTitle")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1 text-sm">
-            {tenant.settings ? (
-              <>
-                <p>
-                  {t("detail.documentPrefix")}:{" "}
-                  <span className="font-medium">
-                    {tenant.settings.documentPrefix}
-                  </span>
-                </p>
-                <p>
-                  {t("detail.quotationPrefix")}:{" "}
-                  <span className="font-medium">
-                    {tenant.settings.quotationPrefix}
-                  </span>
-                </p>
-              </>
+            {tenant.numbering.length > 0 ? (
+              <ul className="space-y-2">
+                {tenant.numbering.map((series) => (
+                  <li
+                    key={series.type}
+                    className="flex items-baseline justify-between gap-4 border-b border-border/60 pb-1.5 last:border-0"
+                  >
+                    <span className="text-muted-foreground">
+                      {tEnums(`type.${series.type}`)}
+                    </span>
+                    <span className="text-right font-medium">
+                      {series.prefix || t("detail.numberingEmpty")}
+                      <span className="ml-2 font-normal text-muted-foreground">
+                        {tEnums(`periodStyle.${series.periodStyle}`)} ·{" "}
+                        {t("detail.numberingDigits", {
+                          count: series.padding,
+                        })}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <p className="text-muted-foreground">{t("detail.never")}</p>
+              <p className="text-muted-foreground">
+                {t("detail.numberingEmpty")}
+              </p>
             )}
           </CardContent>
         </Card>

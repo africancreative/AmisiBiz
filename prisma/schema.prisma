@@ -100,6 +100,11 @@ model Tenant {
   items           Item[]
   contactItems    ContactItem[]
   documents       Document[]
+  documentLines   DocumentLine[]
+  documentPayments DocumentPayment[]
+  documentStatusEvents DocumentStatusEvent[]
+  documentNumberings   DocumentNumbering[]
+  documentSequences    DocumentNumberSequence[]
 
   @@index([slug])
   @@index([status])
@@ -108,16 +113,20 @@ model Tenant {
 }
 
 // ─── Tenant settings (per-tenant configuration) ───────────────────────────────
-// Initialised with defaults on provisioning; document numbering is tenant-scoped.
+// Initialised with defaults on provisioning.
+//
+// Document numbering deliberately does NOT live here any more. The Phase 03
+// stub (`documentPrefix` / `documentNextNumber` / `quotationPrefix`) was a single
+// counter that could not hold a series per document type and per period, so it
+// has been replaced by `DocumentNumbering` + `DocumentNumberSequence`. Keeping
+// both would have meant two sources of truth for an authoritative number.
 
 model TenantSettings {
-  id                 String   @id @default(cuid())
-  tenantId           String   @unique
-  documentPrefix     String   @default("INV")
-  documentNextNumber Int      @default(1)
-  quotationPrefix    String   @default("QUO")
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id       String @id @default(cuid())
+  tenantId String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
@@ -213,6 +222,7 @@ model TaxRate {
   tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   category  TaxCategory  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   items     Item[]
+  documentLines DocumentLine[]
 
   @@unique([tenantId, categoryId, name, effectiveFrom])
   @@index([tenantId])
@@ -303,6 +313,7 @@ model Item {
   tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   taxRate   TaxRate?   @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
   contactItems ContactItem[]
+  documentLines DocumentLine[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -336,29 +347,296 @@ model ContactItem {
   @@index([tenantId, itemId])
 }
 
-// ─── Future: Documents (placeholder for document history) ─────────────────────
+// ─── Documents (Phase 05) ─────────────────────────────────────────────────────
+//
+// One table carries all three sales document types because they share almost
+// everything: numbering, tenant scoping, line snapshots, totals, issuance and
+// audit. What differs is expressed as data — `type`, the allowed status set and
+// the date fields that apply — never as three parallel tables that can drift
+// apart.
+//
+// Two invariants the whole module rests on:
+//
+//   1. A DRAFT is editable and has no number. The number is allocated inside the
+//      issuance transaction, so abandoned or deleted drafts never burn a number
+//      and an issued number is never reused.
+//   2. An ISSUED document is immutable. Its lines, prices, tax, totals, branding
+//      and customer details are frozen (`snapshot`) at issuance, and a database
+//      trigger refuses any write that would change a financially material field.
+//      Corrections happen by voiding or by issuing a replacement that keeps the
+//      original row.
+
+enum DocumentType {
+  QUOTATION
+  INVOICE
+  DELIVERY_NOTE
+}
+
+// The union of all three lifecycles. Which subset applies to a given type is
+// enforced by a CHECK constraint in the database and by the state machine in
+// `src/server/services/documents/lifecycle.ts` — never by the status arriving
+// from the browser.
+enum DocumentStatus {
+  DRAFT
+  ISSUED
+  ACCEPTED            // QUOTATION
+  REJECTED            // QUOTATION
+  EXPIRED             // QUOTATION
+  CANCELLED           // QUOTATION, DELIVERY_NOTE
+  PARTIALLY_PAID      // INVOICE, derived from recorded payments
+  PAID                // INVOICE, derived from recorded payments
+  OVERDUE             // INVOICE
+  VOID                // INVOICE
+  PARTIALLY_DELIVERED // DELIVERY_NOTE source accounting
+  DELIVERED           // DELIVERY_NOTE
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  MOBILE_MONEY
+  CARD
+  CHEQUE
+  OTHER
+}
+
+enum DocumentDiscountType {
+  PERCENT
+  AMOUNT
+}
+
+// How a document series restarts. `NONE` gives one ever-increasing series per
+// tenant and type; calendar and financial years give a fresh series each period,
+// which is what the prefix examples in the brief (`INV-2026-0001`) describe.
+enum DocumentPeriodStyle {
+  NONE
+  CALENDAR_YEAR
+  FINANCIAL_YEAR
+}
 
 model Document {
-  id          String   @id @default(cuid())
-  tenantId    String
-  contactId   String?
-  type        String   // "INVOICE", "QUOTE", etc.
-  number      String
-  status      String   // "DRAFT", "ISSUED", "VOID"
-  total       Decimal  @db.Decimal(18, 4)
-  currency    String
-  issuedAt    DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id       String        @id @default(cuid())
+  tenantId String
+  type     DocumentType
+  status   DocumentStatus @default(DRAFT)
+  // Null while the document is a draft; allocated on issuance.
+  number   String?
+  currency String        @default("KES")
 
-  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contactId       String?
+  sourceDocumentId String? // quotation -> invoice, sales document -> delivery note
+  replacementOfId String?   // correction document that replaces a voided one
+  // Client-supplied key that makes a retried conversion/issue return the same
+  // document instead of creating a second one.
+  idempotencyKey  String?
+
+  // ── Dates. `issuedAt` is when the document was issued (system time);
+  // `issueDate` is the date printed on it — a back-dated invoice is a business
+  // decision, so both are kept.
+  issueDate      DateTime  @default(now())
+  dueDate        DateTime?
+  expiryDate     DateTime?
+  deliveryDate   DateTime?
+  deliveryNote   String?
+  issuedAt       DateTime?
+  issuedById     String?
+  voidedAt       DateTime?
+  voidReason     String?
+  voidedById     String?
+
+  // ── Customer-facing text
+  customerNote String?
+  terms        String?
+
+  // ── Stored breakdown (see `documents/calculations.ts`). Consistency between
+  // these five columns is a database CHECK, not a convention.
+  subtotal      Decimal @default(0) @db.Decimal(18, 4)
+  totalDiscount Decimal @default(0) @db.Decimal(18, 4)
+  taxableBase   Decimal @default(0) @db.Decimal(18, 4)
+  taxTotal      Decimal @default(0) @db.Decimal(18, 4)
+  total         Decimal @default(0) @db.Decimal(18, 4)
+  // Per-rate grouping, e.g. [{ name: "VAT 16%", rate: "0.1600", base: "...", amount: "..." }]
+  taxBreakdown  Json?
+  // Rounding policy applied when the totals were computed, recorded so a
+  // document issued under a future policy change stays reproducible.
+  roundingPolicy String @default("half-up-per-line-v1")
+
+  // Frozen business/customer/line data captured at issuance. The PDF renders
+  // from this, so later contact, branding or catalogue edits cannot rewrite an
+  // issued document.
+  snapshot    Json?
+  snapshotAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact       Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  sourceDocument Document?        @relation("DocumentDerivation", fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+  derivedDocuments Document[]      @relation("DocumentDerivation")
+  replacementOf  Document?         @relation("DocumentReplacement", fields: [replacementOfId], references: [id], onDelete: Restrict)
+  replacements   Document[]        @relation("DocumentReplacement")
+  issuedBy       User?             @relation("DocumentIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+  voidedBy       User?             @relation("DocumentVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
+  lines         DocumentLine[]
+  payments      DocumentPayment[]
+  statusEvents  DocumentStatusEvent[]
 
   @@unique([tenantId, type, number])
+  @@unique([tenantId, idempotencyKey])
   @@index([tenantId])
   @@index([tenantId, contactId])
   @@index([tenantId, status])
+  @@index([tenantId, type, status])
   @@index([tenantId, issuedAt])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, sourceDocumentId])
+}
+
+model DocumentLine {
+  id       String  @id @default(cuid())
+  tenantId String
+  documentId String
+  position Int
+
+  // Provenance only — the printed line always comes from the snapshot columns
+  // below, never from the current catalogue.
+  itemId String?
+  // For a delivery note, the source document line this line delivers against.
+  sourceLineId String?
+
+  description String
+  itemCode    String?
+  unitOfMeasure String @default("each")
+
+  quantity       Decimal @db.Decimal(18, 4)
+  unitPrice      Decimal @db.Decimal(18, 4)
+  discountType   DocumentDiscountType?
+  discountPercent Decimal @default(0) @db.Decimal(5, 2)
+  discountAmount  Decimal @default(0) @db.Decimal(18, 4)
+  lineTotal        Decimal @db.Decimal(18, 4) // quantity x price, rounded
+  lineDiscount     Decimal @default(0) @db.Decimal(18, 4)
+  lineNet          Decimal @db.Decimal(18, 4) // lineTotal - lineDiscount
+  lineTax          Decimal @default(0) @db.Decimal(18, 4)
+
+  // Tax snapshot. `taxRateId` records where the rate came from; the fraction and
+  // label are copied so a retired rate cannot change an old document.
+  taxRateId   String?
+  taxName     String?
+  taxRate     Decimal @default(0) @db.Decimal(5, 4)
+
+  // Running total delivered against this line (source documents only).
+  deliveredQuantity Decimal @default(0) @db.Decimal(18, 4)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document    Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  item        Item?          @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  taxRateRef  TaxRate?        @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  sourceLine  DocumentLine?   @relation("DeliveryAgainst", fields: [sourceLineId], references: [id], onDelete: Restrict)
+  deliveries  DocumentLine[]  @relation("DeliveryAgainst")
+
+  @@index([tenantId])
+  @@unique([tenantId, documentId, position])
+  @@index([tenantId, itemId])
+}
+
+model DocumentPayment {
+  id       String  @id @default(cuid())
+  tenantId String
+  documentId String
+
+  amount     Decimal @db.Decimal(18, 4)
+  occurredOn DateTime
+  method     PaymentMethod @default(BANK_TRANSFER)
+  reference  String?
+  note       String?
+  // Reversing a payment never deletes it: the row stays with its reversal
+  // metadata so the balance history is auditable.
+  reversedAt DateTime?
+  reversedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tenantId, documentId])
+  @@index([tenantId, occurredOn])
+}
+
+// Append-only transition log: who moved which document to which status, when,
+// and why. This is the audit trail the lifecycle needs on top of `AuditLog`.
+model DocumentStatusEvent {
+  id       String  @id @default(cuid())
+  tenantId String
+  documentId String
+
+  fromStatus DocumentStatus?
+  toStatus   DocumentStatus
+  reason     String?
+  actorId    String?
+
+  createdAt DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, documentId])
+  @@index([tenantId, createdAt])
+}
+
+// ─── Document numbering configuration and counters ────────────────────────────
+
+// One row per tenant per document type: what the number looks like.
+model DocumentNumbering {
+  id       String  @id @default(cuid())
+  tenantId String
+  type     DocumentType
+
+  prefix      String              @default("")
+  padding     Int                 @default(4)
+  separator   String              @default("-")
+  periodStyle DocumentPeriodStyle @default(CALENDAR_YEAR)
+  // Only read when periodStyle is FINANCIAL_YEAR: the month the tenant's books
+  // start in (1 = January). A financial year is written "2026/27", i.e. the
+  // calendar year it begins in.
+  fiscalStartMonth Int            @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sequences DocumentNumberSequence[]
+
+  @@unique([tenantId, type])
+  @@index([tenantId])
+}
+
+// The counter itself, one row per (tenant, type, period). Allocation happens in
+// `allocate_document_number()` under `SELECT ... FOR UPDATE`, which is what makes
+// concurrent issuing safe; the unique index on the document number is the
+// backstop if the lock is ever bypassed.
+model DocumentNumberSequence {
+  id       String  @id @default(cuid())
+  tenantId String
+  type     DocumentType
+  // e.g. "2026" (calendar), "2026/27" (financial) or "" (no period).
+  period   String  @default("")
+  nextValue Int    @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  numbering DocumentNumbering @relation(fields: [tenantId, type], references: [tenantId, type], onDelete: Cascade)
+
+  @@unique([tenantId, type, period])
+  @@index([tenantId])
 }
 
 // ─── Auth.js Required Tables ──────────────────────────────────────────────────
@@ -389,6 +667,8 @@ model User {
   accountTokens     AccountToken[]
   tenantsActivated  Tenant[]       @relation("TenantActivatedBy")
   tenantsSuspended  Tenant[]       @relation("TenantSuspendedBy")
+  documentsIssued   Document[]     @relation("DocumentIssuedBy")
+  documentsVoided   Document[]     @relation("DocumentVoidedBy")
 
   @@index([email])
   @@index([platformRole])

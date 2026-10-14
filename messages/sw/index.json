@@ -168,6 +168,44 @@
       "emptyDescription": "Nyaraka unazounda zitaonekana hapa. Moduli ya nyaraka inakuja katika awamu ijayo."
     }
   },
+  "documentEnums": {
+    "type": {
+      "QUOTATION": "Nukuu",
+      "INVOICE": "Ankara",
+      "DELIVERY_NOTE": "Nyaraka ya usambazo"
+    },
+    "status": {
+      "DRAFT": "Rasimu",
+      "ISSUED": "Imetolewa",
+      "ACCEPTED": "Imekubaliwa",
+      "REJECTED": "Imekataliwa",
+      "EXPIRED": "Imeisha muda",
+      "CANCELLED": "Imeghairiwa",
+      "PARTIALLY_PAID": "Imelipwa kwa sehemu",
+      "PAID": "Imelipwa",
+      "OVERDUE": "Imecha Muda",
+      "VOID": "Imehairishwa",
+      "PARTIALLY_DELIVERED": "Imesambazwa kwa sehemu",
+      "DELIVERED": "Imesambazwa"
+    },
+    "periodStyle": {
+      "NONE": "Hakuna kipindi",
+      "CALENDAR_YEAR": "Mwaka wa kalenda",
+      "FINANCIAL_YEAR": "Mwaka wa fedha"
+    },
+    "paymentMethod": {
+      "CASH": "Tasfuti",
+      "BANK_TRANSFER": "Uhamisho wa benki",
+      "MOBILE_MONEY": "Simu ya fedha",
+      "CARD": "Kadi",
+      "CHEQUE": "Cheki",
+      "OTHER": "Nyingine"
+    },
+    "discountType": {
+      "PERCENT": "Asilimia",
+      "AMOUNT": "Kiasi"
+    }
+  },
   "branding": {
     "title": "Chapa",
     "description": "Sanidi rangi na nembo zinazotumika kwenye nyaraka zako mwenyewe.",
@@ -259,10 +297,10 @@
       "timezone": "Eneo la saa",
       "locale": "Lugha",
       "never": "—",
-      "settingsTitle": "Mipangilio ya hati",
+      "settingsTitle": "Nambari za nyaraka",
+      "numberingEmpty": "Hakuna mfuatano wa nambari ulioowekwa.",
+      "numberingDigits": "tarime {count}",
       "brandingTitle": "Chapa",
-      "documentPrefix": "Kiambishi cha hati",
-      "quotationPrefix": "Kiambishi cha nukuu",
       "notFound": "Mteja hapatikani."
     },
     "actions": {

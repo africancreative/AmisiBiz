@@ -3,24 +3,37 @@ import { z } from "zod";
 /**
  * Document QUERY validation.
  *
- * Phase 05 owns document creation, numbering and totals. What Phase 04 needs is
- * the contact's document history, and a history list is still a server entry
- * point: `getDocumentsAction` previously cast its input to an interface, so a
- * client could send `pageSize: 1e9` or an arbitrary `sortBy` that Prisma would
- * reject mid-query. Bounding the read is the minimum that keeps the CRM screen
- * honest without starting the documents phase early.
+ * Phase 04 introduced this read path for the contact's document history, when
+ * `Document` was a header table and the vocabulary was free text. Phase 05 owns
+ * the document engine, and the lists below are now the database enum itself, so
+ * a query can never filter on a type or a status that cannot exist.
+ *
+ * A history list is still a server entry point: `getDocumentsAction` previously
+ * cast its input to an interface, so a client could send `pageSize: 1e9` or an
+ * arbitrary `sortBy` that Prisma would reject mid-query. The bounds below are
+ * what keep the read honest; the write-side schemas are added with the engine.
  *
  * `tenantId` is validated as a cuid and then re-authorized; it is never trusted
  * merely because it parses.
  */
-export const DOCUMENT_TYPES = ["INVOICE", "QUOTE"] as const;
+export const DOCUMENT_TYPES = [
+  "QUOTATION",
+  "INVOICE",
+  "DELIVERY_NOTE",
+] as const;
 export const DOCUMENT_STATUSES = [
   "DRAFT",
   "ISSUED",
+  "ACCEPTED",
+  "REJECTED",
+  "EXPIRED",
+  "CANCELLED",
   "PARTIALLY_PAID",
   "PAID",
   "OVERDUE",
   "VOID",
+  "PARTIALLY_DELIVERED",
+  "DELIVERED",
 ] as const;
 
 export const documentQuerySchema = z.object({

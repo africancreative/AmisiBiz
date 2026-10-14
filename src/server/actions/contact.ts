@@ -1,6 +1,7 @@
 "use server";
 
 import { Prisma } from "@prisma/client";
+import type { DocumentStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/helpers";
 import { authorizeTenant } from "@/server/auth/authorization";
@@ -577,7 +578,13 @@ export async function getContactBalanceAction(
     return fail("Contact not found.", { code: "NOT_FOUND" });
   }
 
-  const OUTSTANDING_STATUSES = ["ISSUED", "OVERDUE", "PARTIALLY_PAID"];
+  // The statuses that still owe money, typed against the document enum so a
+  // renamed status cannot silently turn the balance into a zero.
+  const OUTSTANDING_STATUSES: DocumentStatus[] = [
+    "ISSUED",
+    "OVERDUE",
+    "PARTIALLY_PAID",
+  ];
 
   try {
     const [aggregate, documentCount, branding, tenant] = await Promise.all([

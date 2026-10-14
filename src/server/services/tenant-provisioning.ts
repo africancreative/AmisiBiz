@@ -35,6 +35,22 @@ export type ProvisionedTenant = {
   hostname: string | null;
 };
 
+/**
+ * The three document series a new tenant starts with.
+ *
+ * Numbering lives in `DocumentNumbering` (one row per tenant per type) rather
+ * than on `TenantSettings`, because the document engine and the browser must
+ * never hold two ideas of what the next number is. `allocate_document_number()`
+ * applies the same defaults on first use, so a tenant that was provisioned
+ * before this table existed can still issue its first document; creating the
+ * rows here simply means the numbering screen has something to show and edit.
+ */
+export const DEFAULT_DOCUMENT_SERIES = [
+  { type: "QUOTATION", prefix: "QUO" },
+  { type: "INVOICE", prefix: "INV" },
+  { type: "DELIVERY_NOTE", prefix: "DN" },
+] as const;
+
 /** Generates a validated, unique, non-reserved slug for a tenant name. */
 export async function generateUniqueTenantSlug(
   tx: Prisma.TransactionClient,
@@ -82,12 +98,12 @@ export async function provisionTenant(
       currency: input.currency ?? "USD",
       timezone: input.timezone ?? "UTC",
       locale: input.locale ?? "en",
-      settings: {
-        create: {
-          documentPrefix: "INV",
-          documentNextNumber: 1,
-          quotationPrefix: "QUO",
-        },
+      settings: { create: {} },
+      documentNumberings: {
+        create: DEFAULT_DOCUMENT_SERIES.map((series) => ({
+          type: series.type,
+          prefix: series.prefix,
+        })),
       },
       branding: {
         create: {

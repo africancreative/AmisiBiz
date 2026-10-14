@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
-import type { TenantStatus } from "@prisma/client";
+import type { DocumentPeriodStyle, DocumentType, TenantStatus } from "@prisma/client";
 
 /**
  * Platform-admin read models.
@@ -130,11 +130,21 @@ export type TenantDetail = {
   suspensionReason: string | null;
   hostnames: string[];
   memberCount: number;
-  settings: {
-    documentPrefix: string;
-    documentNextNumber: number;
-    quotationPrefix: string;
-  } | null;
+  /**
+   * Document numbering series configuration. Phase 03 carried this on
+   * `TenantSettings` as `documentPrefix`/`quotationPrefix`; the document engine
+   * keeps one row per tenant per document type, so the console reads the series
+   * instead. It is the one piece of tenant business configuration the platform
+   * console has always shown, and it contains no customer data.
+   */
+  numbering: Array<{
+    type: DocumentType;
+    prefix: string;
+    padding: number;
+    separator: string;
+    periodStyle: DocumentPeriodStyle;
+    fiscalStartMonth: number;
+  }>;
   branding: {
     displayName: string | null;
     primaryColor: string;
@@ -167,11 +177,15 @@ export async function getTenantDetail(
       suspensionReason: true,
       domains: { select: { hostname: true }, orderBy: { isPrimary: "desc" } },
       _count: { select: { members: true } },
-      settings: {
+      documentNumberings: {
+        orderBy: { type: "asc" },
         select: {
-          documentPrefix: true,
-          documentNextNumber: true,
-          quotationPrefix: true,
+          type: true,
+          prefix: true,
+          padding: true,
+          separator: true,
+          periodStyle: true,
+          fiscalStartMonth: true,
         },
       },
       branding: {
@@ -206,7 +220,7 @@ export async function getTenantDetail(
     suspensionReason: tenant.suspensionReason,
     hostnames: tenant.domains.map((d) => d.hostname),
     memberCount: tenant._count.members,
-    settings: tenant.settings,
+    numbering: tenant.documentNumberings,
     branding: tenant.branding,
   };
 }

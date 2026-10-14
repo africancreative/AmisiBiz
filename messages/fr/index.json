@@ -168,6 +168,44 @@
       "emptyDescription": "Les documents que vous créez apparaîtront ici. Le module documents arrive dans une phase ultérieure."
     }
   },
+  "documentEnums": {
+    "type": {
+      "QUOTATION": "Devis",
+      "INVOICE": "Facture",
+      "DELIVERY_NOTE": "Bon de livraison"
+    },
+    "status": {
+      "DRAFT": "Brouillon",
+      "ISSUED": "Émis",
+      "ACCEPTED": "Accepté",
+      "REJECTED": "Refusé",
+      "EXPIRED": "Expiré",
+      "CANCELLED": "Annulé",
+      "PARTIALLY_PAID": "Partiellement payé",
+      "PAID": "Payé",
+      "OVERDUE": "En retard",
+      "VOID": "Annulée",
+      "PARTIALLY_DELIVERED": "Partiellement livré",
+      "DELIVERED": "Livré"
+    },
+    "periodStyle": {
+      "NONE": "Sans période",
+      "CALENDAR_YEAR": "Année civile",
+      "FINANCIAL_YEAR": "Exercice"
+    },
+    "paymentMethod": {
+      "CASH": "Espèces",
+      "BANK_TRANSFER": "Virement bancaire",
+      "MOBILE_MONEY": "Paiement mobile",
+      "CARD": "Carte",
+      "CHEQUE": "Chèque",
+      "OTHER": "Autre"
+    },
+    "discountType": {
+      "PERCENT": "Pourcentage",
+      "AMOUNT": "Montant"
+    }
+  },
   "branding": {
     "title": "Image de marque",
     "description": "Configurez les couleurs et le logo utilisés sur vos propres documents.",
@@ -259,10 +297,10 @@
       "timezone": "Fuseau horaire",
       "locale": "Langue",
       "never": "—",
-      "settingsTitle": "Paramètres des documents",
+      "settingsTitle": "Numérotation des documents",
+      "numberingEmpty": "Aucune séquence de numérotation configurée.",
+      "numberingDigits": "{count} chiffres",
       "brandingTitle": "Image de marque",
-      "documentPrefix": "Préfixe des documents",
-      "quotationPrefix": "Préfixe des devis",
       "notFound": "Locataire introuvable."
     },
     "actions": {
