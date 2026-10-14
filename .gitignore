@@ -8,6 +8,9 @@ build/
 next-env.d.ts
 *.tsbuildinfo
 
+# Turborepo
+.turbo/
+
 # Environment files - NEVER COMMIT THESE
 .env
 .env.local
@@ -21,6 +24,15 @@ prisma/*.db-journal
 
 # Tenant uploads — private business data, never commit
 uploads/
+
+# Local scratch and tooling — throwaway-cluster logs, migration probes and
+# editor/agent state. These routinely contain hostnames and connection strings,
+# so they are ignored rather than merely left unstaged.
+.tmp/
+.tmp/*
+!.tmp/README*
+.kilo/
+.qoder/
 
 # Editor
 .vscode/*

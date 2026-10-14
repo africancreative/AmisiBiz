@@ -1,0 +1,7 @@
+{
+  "extends": "@amisibiz/config/tsconfig/base.json",
+  "compilerOptions": {
+    "types": []
+  },
+  "include": ["src"]
+}

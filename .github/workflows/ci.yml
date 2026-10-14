@@ -1,0 +1,78 @@
+# AmisiBiz — continuous integration.
+#
+# Runs the same gates that every phase must pass locally: format check, lint,
+# type-check, unit/contract tests and the production build, across every
+# workspace via Turborepo.
+#
+# This workflow never receives real credentials. Database-backed integration
+# tests are skipped automatically (they run only when TEST_DATABASE_URL is set
+# and must point at a disposable database — never the shared Supabase project).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Placeholder values only — enough for env validation and the build to run
+  # without contacting any service.
+  NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+  NEXT_PUBLIC_SUPABASE_URL: "https://ci-placeholder.supabase.co"
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_ci_placeholder_0000000000"
+  SUPABASE_SECRET_KEY: "sb_secret_ci_placeholder_0000000000"
+  DATABASE_URL: "postgresql://ci:ci@localhost:5432/amisibiz_ci"
+  DIRECT_URL: "postgresql://ci:ci@localhost:5432/amisibiz_ci"
+
+jobs:
+  verify:
+    name: Format, lint, type-check, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # Version comes from the root "packageManager" field.
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        # @prisma/client is generated here via the apps/web "postinstall".
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-turbo-
+
+      - name: Check formatting
+        run: pnpm format:check
+
+      - name: Lint, type-check, test, build
+        run: pnpm turbo run lint type-check test:run build
+
+      - name: Guard — no Supabase secret key value in build output
+        run: |
+          # Matches a value-shaped secret key ("sb_secret_" + 20+ key chars).
+          # The bare prefix alone is legitimate library code (Supabase's own
+          # key-format detection), so it must not trip this guard.
+          if grep -RE --binary-files=text "sb_secret_[A-Za-z0-9_-]{20,}" apps/web/.next/static apps/web/.next/server; then
+            echo "::error::Supabase secret key value found in the client/server build output"
+            exit 1
+          fi
+          echo "OK: no 'sb_secret_<value>' pattern in the Next.js build output."

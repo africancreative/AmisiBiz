@@ -1,0 +1,4 @@
+# Machine-managed by pnpm — pnpm rewrites these in its own style on every
+# install, which would fight Prettier permanently.
+pnpm-lock.yaml
+pnpm-workspace.yaml

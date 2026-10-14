@@ -1,0 +1,24 @@
+{
+  "name": "@amisibiz/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "AmisiBiz mobile shell — Capacitor (Android). Native platform deliberately not added yet; see README.",
+  "scripts": {
+    "cap": "cap",
+    "cap:add:android": "cap add android",
+    "cap:sync": "cap sync",
+    "cap:open:android": "cap open android",
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3"
+  },
+  "devDependencies": {
+    "@amisibiz/config": "workspace:*",
+    "@capacitor/cli": "^8.5.3",
+    "eslint": "^9.26.0",
+    "typescript": "^5.8.3"
+  }
+}

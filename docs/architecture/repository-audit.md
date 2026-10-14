@@ -1,5 +1,11 @@
 # AmisiBiz — Repository Audit (Phase 00)
 
+> **Historical record (Phase 00, 2026-10-12).** This audit describes the
+> repository _before_ Phases 01–04.5a landed; its stack entries (npm, Auth.js),
+> git status ("no commits yet") and risk table are superseded. For current
+> state read `../implementation/phase-checklist.md`, the phase reports, and
+> `../implementation/phase-04.5b-monorepo-and-clients-audit.md`.
+
 - **Status:** Audit complete
 - **Branch:** `main` — **no commits yet**; the entire tree is untracked (working tree only).
 - **Auditor role:** Principal Engineer

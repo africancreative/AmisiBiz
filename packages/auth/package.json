@@ -1,0 +1,18 @@
+{
+  "name": "@amisibiz/auth",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Authorization contracts — role unions, permission definitions and the app session shape",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@amisibiz/config": "workspace:*",
+    "eslint": "^9.26.0",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@amisibiz/domain",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared domain rules and validation primitives (Zod schemas, branding colour rules)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@amisibiz/config": "workspace:*",
+    "eslint": "^9.26.0",
+    "typescript": "^5.8.3"
+  }
+}
