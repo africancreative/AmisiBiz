@@ -49,6 +49,7 @@
       "error": {
         "invalid": "Barua pepe au nenosiri si sahihi.",
         "suspended": "Akaunti yako imezuiwa. Wasiliana na usaidizi.",
+        "linkExpired": "Kiungo hiki si sahihi au kimeisha muda. Ingia tena au omba kipya.",
         "generic": "Kuingia kumeshindwa. Jaribu tena."
       }
     },
@@ -70,6 +71,8 @@
       "loginLink": "Ingia",
       "successTitle": "Akaunti imefunguliwa!",
       "successSubtitle": "Sasa unaweza kuingia kwenye AmisiBiz.",
+      "checkEmailTitle": "Angalia barua pepe yako",
+      "checkEmailSubtitle": "Tumetuma kiungo cha uthibitisho kwenye kikasha chako. Kithibitishe, kisha ingia.",
       "terms": "Kwa kufungua akaunti, unakubaliana na Masharti yetu ya Huduma na Sera ya Faragha."
     },
     "forgotPassword": {

@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { readFile, stat } from "fs/promises";
 import { join, resolve, sep } from "path";
-import { auth } from "@/lib/auth/config";
+import { getSessionUser } from "@/lib/auth/session-user";
 import { resolveTenantContext } from "@/server/auth/authorization";
 import { z } from "zod";
-
 /**
  * Private serving route for tenant uploads (currently logos).
  *
@@ -82,14 +81,14 @@ export async function GET(
       return jsonError("Not found", 404);
     }
 
-    const session = await auth();
-    if (!session?.user?.id) {
+    const user = await getSessionUser();
+    if (!user) {
       return jsonError("Unauthenticated", 401);
     }
 
     // Membership (and tenant operational status) is checked on every read.
     try {
-      await resolveTenantContext(session.user.id, parsedTenant.data);
+      await resolveTenantContext(user.id, parsedTenant.data);
     } catch {
       return jsonError("Not found", 404);
     }

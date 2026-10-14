@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth/config";
+import { getSessionUser } from "@/lib/auth/session-user";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,7 @@ export default async function LocaleHomePage({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  const session = await auth();
+  const user = await getSessionUser();
 
-  redirect(session?.user?.id ? `/${locale}/dashboard` : `/${locale}/login`);
+  redirect(user ? `/${locale}/dashboard` : `/${locale}/login`);
 }

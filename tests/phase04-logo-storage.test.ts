@@ -60,7 +60,7 @@ const fsMock = vi.hoisted(() => ({
 
 vi.mock("fs/promises", () => fsMock);
 vi.mock("@/lib/db/prisma", () => import("./prisma-mock"));
-vi.mock("@/lib/auth/config", () => import("./auth-mock"));
+vi.mock("@/lib/auth/session-user", () => import("./auth-mock"));
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -236,7 +236,7 @@ describe("Phase 04 logo upload route", () => {
     vi.clearAllMocks();
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    authMock.mockResolvedValue({ user: { id: USER_ID } });
+    authMock.mockResolvedValue({ id: USER_ID });
     prismaMock.auditLog.create.mockResolvedValue({ id: "log_1" });
     prismaMock.tenantBranding.upsert.mockResolvedValue({ id: "branding_1" });
     prismaMock.tenantMember.findUnique.mockResolvedValue(null);
@@ -537,7 +537,7 @@ describe("Phase 04 logo upload route", () => {
     fsMock.writeFile.mockResolvedValue(undefined);
     prismaMock.tenantBranding.upsert.mockResolvedValue({ id: "branding_1" });
     prismaMock.auditLog.create.mockResolvedValue({ id: "log_1" });
-    authMock.mockResolvedValue({ user: { id: USER_ID } });
+    authMock.mockResolvedValue({ id: USER_ID });
     asRole("BUSINESS_ADMIN");
 
     const tooWide = await uploadLogo(
@@ -610,7 +610,7 @@ describe("Phase 04 private upload serving route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    authMock.mockResolvedValue({ user: { id: USER_ID } });
+    authMock.mockResolvedValue({ id: USER_ID });
     prismaMock.auditLog.create.mockResolvedValue({ id: "log_1" });
     prismaMock.tenantMember.findUnique.mockResolvedValue(null);
     fsMock.readFile.mockResolvedValue(Buffer.from("logo-bytes"));

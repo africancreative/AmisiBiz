@@ -55,12 +55,6 @@ enum InvitationStatus {
   REVOKED
 }
 
-// Single-use, hashed tokens for email verification and password reset.
-enum AccountTokenPurpose {
-  EMAIL_VERIFICATION
-  PASSWORD_RESET
-}
-
 // ─── Tenant (Organisation) ────────────────────────────────────────────────────
 
 model Tenant {
@@ -639,32 +633,32 @@ model DocumentNumberSequence {
   @@index([tenantId])
 }
 
-// ─── Auth.js Required Tables ──────────────────────────────────────────────────
+// ─── User profile (identity authority: Supabase Auth) ────────────────────────
 
+// Identity authority is Supabase Auth (GoTrue). This profile row mirrors the
+// app-relevant facts (role, status, revocation version); `id` MUST equal the
+// Supabase Auth user UUID — it is assigned from the Auth user at registration,
+// never generated here.
 model User {
   id            String       @id @default(cuid())
   name          String?
   email         String       @unique
   emailVerified DateTime?
   image         String?
-  password      String?      // bcrypt hash — nullable for OAuth users
   platformRole  PlatformRole @default(USER)
   status        UserStatus   @default(ACTIVE)
-  // Incremented to revoke every existing JWT session for this user
-  // (password change, forced logout, membership/role compromise).
+  // Incremented to revoke every existing Supabase session for this user
+  // (password change, forced logout, membership/role compromise). The current
+  // value is mirrored into the access token's app_metadata claim; a session is
+  // valid only while the two match.
   sessionVersion Int         @default(0)
 
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  // Auth.js relations
-  accounts      Account[]
-  sessions      Session[]
-
   // Application relations
   tenantMemberships TenantMember[]
   auditLogs         AuditLog[]
-  accountTokens     AccountToken[]
   tenantsActivated  Tenant[]       @relation("TenantActivatedBy")
   tenantsSuspended  Tenant[]       @relation("TenantSuspendedBy")
   documentsIssued   Document[]     @relation("DocumentIssuedBy")
@@ -673,70 +667,6 @@ model User {
   @@index([email])
   @@index([platformRole])
   @@index([sessionVersion])
-}
-
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String? @db.Text
-  access_token      String? @db.Text
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String? @db.Text
-  session_state     String?
-
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-
-  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
-  @@index([userId])
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-}
-
-model VerificationToken {
-  identifier String
-  token      String
-  expires    DateTime
-
-  @@unique([identifier, token])
-}
-
-// ─── Single-use account tokens (email verification, password reset) ───────────
-// Only a SHA-256 hash of the token is persisted; the raw value lives solely in
-// the email link. Tokens are single-use (usedAt) and time-boxed (expiresAt).
-
-model AccountToken {
-  id        String              @id @default(cuid())
-  userId    String
-  purpose   AccountTokenPurpose
-  tokenHash String              @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime            @default(now())
-
-  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, purpose])
-  @@index([expiresAt])
 }
 
 // ─── Tenant Membership (many-to-many User ↔ Tenant) ──────────────────────────

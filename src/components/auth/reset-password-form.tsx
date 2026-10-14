@@ -3,15 +3,17 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { resetPasswordAction } from "@/server/actions/auth";
+import { updatePasswordAction } from "@/server/actions/auth";
 
-export function ResetPasswordForm({
-  locale,
-  token,
-}: {
-  locale: string;
-  token: string;
-}) {
+/**
+ * New-password form for the recovery flow.
+ *
+ * The recovery link is consumed by `/auth/callback` first, which establishes
+ * the signed-in recovery session; this form therefore never handles a token —
+ * it only submits the new password for the already-authenticated caller.
+ * (The page refuses to render this form when no session exists.)
+ */
+export function ResetPasswordForm({ locale }: { locale: string }) {
   const t = useTranslations("auth.resetPassword");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -24,11 +26,7 @@ export function ResetPasswordForm({
     setPending(true);
     setError(null);
 
-    const result = await resetPasswordAction({
-      token,
-      password,
-      confirmPassword,
-    });
+    const result = await updatePasswordAction({ password, confirmPassword });
     setPending(false);
 
     if (!result.success) {
@@ -36,22 +34,6 @@ export function ResetPasswordForm({
       return;
     }
     setDone(true);
-  }
-
-  if (!token) {
-    return (
-      <div className="space-y-4">
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
-          {t("invalidToken")}
-        </p>
-        <Link
-          href={`/${locale}/forgot-password`}
-          className="block text-center text-sm font-medium text-brand-700 hover:underline"
-        >
-          {t("backToLogin")}
-        </Link>
-      </div>
-    );
   }
 
   if (done) {

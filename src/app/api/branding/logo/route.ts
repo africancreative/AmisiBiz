@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth/config";
+import { getSessionUser } from "@/lib/auth/session-user";
 import { PERMISSIONS } from "@/lib/auth/permissions";
 import { authorizeTenant } from "@/server/auth/authorization";
 import { prisma } from "@/lib/db/prisma";
@@ -67,8 +67,8 @@ const EXTENSION_BY_MIME: Record<string, string> = {
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    const user = await getSessionUser();
+    if (!user) {
       return NextResponse.json(
         { success: false, error: "Unauthenticated" },
         { status: 401 },
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
 
     try {
       await authorizeTenant(
-        session.user.id,
+        user.id,
         parsedTenant.data.tenantId,
         PERMISSIONS.BUSINESS_SETTINGS_UPDATE,
       );
@@ -183,7 +183,7 @@ export async function POST(request: NextRequest) {
 
     await recordAudit({
       action: AUDIT_ACTIONS.BRANDING_LOGO_UPLOADED,
-      userId: session.user.id,
+      userId: user.id,
       tenantId,
       resource: "TenantBranding",
       resourceId: tenantId,

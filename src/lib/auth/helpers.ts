@@ -1,14 +1,18 @@
-import { auth } from "@/lib/auth/config";
+import { getSessionUser, type AppSessionUser } from "@/lib/auth/session-user";
 import { prisma } from "@/lib/db/prisma";
 import { redirect } from "next/navigation";
 import type { PlatformRole, TenantRole } from "@prisma/client";
 
+/** App session wrapper kept for call-site compatibility (`session.user.*`). */
+export type AppSession = { user: AppSessionUser };
+
 /**
- * Returns the current Auth.js session or null.
+ * Returns the validated current user or null.
  * Use in Server Components and Server Actions.
  */
-export async function getSession() {
-  return await auth();
+export async function getSession(): Promise<AppSession | null> {
+  const user = await getSessionUser();
+  return user ? { user } : null;
 }
 
 /**
@@ -18,12 +22,12 @@ export async function getSession() {
  * This is a UI-level convenience only. Server Actions and API routes MUST
  * additionally call the authorization service before touching data.
  */
-export async function requireAuth(locale = "en") {
-  const session = await auth();
-  if (!session?.user?.id) {
+export async function requireAuth(locale = "en"): Promise<AppSession> {
+  const user = await getSessionUser();
+  if (!user) {
     redirect(`/${locale}/login`);
   }
-  return session;
+  return { user };
 }
 
 /**

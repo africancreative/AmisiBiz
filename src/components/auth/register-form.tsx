@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
@@ -23,6 +22,8 @@ export function RegisterForm({ locale }: { locale: string }) {
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [pending, setPending] = useState(false);
+  const [awaitingEmailConfirmation, setAwaitingEmailConfirmation] =
+    useState(false);
 
   function update(field: keyof typeof form) {
     return (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -35,7 +36,7 @@ export function RegisterForm({ locale }: { locale: string }) {
     setError(null);
     setFieldErrors({});
 
-    const result = await registerAction(form);
+    const result = await registerAction(form, locale);
 
     if (!result.success) {
       setError(result.error);
@@ -44,21 +45,37 @@ export function RegisterForm({ locale }: { locale: string }) {
       return;
     }
 
-    // Automatically sign the new owner in and send them to the dashboard.
-    const signInResult = await signIn("credentials", {
-      email: form.email,
-      password: form.password,
-      redirect: false,
-    });
-
-    if (!signInResult || signInResult.error) {
-      // Account creation succeeded; fall back to the login screen.
-      router.push(`/${locale}/login`);
+    if (result.data?.emailConfirmationRequired) {
+      // Email confirmation is enabled: no session exists yet. Show the
+      // "check your email" state instead of navigating.
+      setAwaitingEmailConfirmation(true);
+      setPending(false);
       return;
     }
 
+    // The registration action established the session server-side; go to the
+    // workspace dashboard.
     router.push(`/${locale}/dashboard`);
     router.refresh();
+  }
+
+  if (awaitingEmailConfirmation) {
+    return (
+      <div className="space-y-4">
+        <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
+          <strong className="block font-semibold">
+            {t("checkEmailTitle")}
+          </strong>
+          {t("checkEmailSubtitle")}
+        </p>
+        <Link
+          href={`/${locale}/login`}
+          className="block text-center text-sm font-medium text-brand-700 hover:underline"
+        >
+          {t("loginLink")}
+        </Link>
+      </div>
+    );
   }
 
   function renderError(field: keyof typeof form) {

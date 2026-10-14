@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { PlatformRole, TenantRole } from "@prisma/client";
 
 vi.mock("@/lib/db/prisma", () => import("./prisma-mock"));
-vi.mock("@/lib/auth/config", () => import("./auth-mock"));
+vi.mock("@/lib/auth/session-user", () => import("./auth-mock"));
+vi.mock("@/lib/supabase/server", () => import("./supabase-mock"));
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`REDIRECT:${url}`);
@@ -15,6 +16,11 @@ vi.mock("next/headers", () => ({
 
 import { prismaMock } from "./prisma-mock";
 import { authMock } from "./auth-mock";
+import {
+  supabaseAdminMock,
+  supabaseServerMock,
+  resetSupabaseMocks,
+} from "./supabase-mock";
 import {
   requireAuth,
   TENANT_ROLE_RANK,
@@ -76,18 +82,16 @@ function targetMember(role: TenantRole, tenantId = TENANT_ID) {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  resetSupabaseMocks();
   const { resetRateLimit } = await import("@/lib/security/rate-limit");
   resetRateLimit();
 
   authMock.mockResolvedValue({
-    user: {
-      id: USER_ID,
-      email: "owner@example.com",
-      name: "Owner",
-      platformRole: "USER",
-      status: "ACTIVE",
-    },
-    expires: new Date(Date.now() + 3600_000).toISOString(),
+    id: USER_ID,
+    email: "owner@example.com",
+    name: "Owner",
+    platformRole: "USER",
+    status: "ACTIVE",
   });
 
   prismaMock.auditLog.create.mockResolvedValue({ id: "log_1" });
@@ -507,13 +511,32 @@ describe("session validity and revocation", () => {
     expect(isSessionValid(null, 0)).toBe(false);
   });
 
-  it("revokes sessions by incrementing the session version", async () => {
-    prismaMock.user.update.mockResolvedValue({ id: USER_ID });
+  it("revokes sessions: bumps the version, kills GoTrue sessions, syncs the claim", async () => {
+    prismaMock.user.update.mockResolvedValue({ sessionVersion: 4 });
     await revokeUserSessions(USER_ID);
+
+    // 1. Authoritative database bump (fail-closed for our server).
     expect(prismaMock.user.update).toHaveBeenCalledWith({
       where: { id: USER_ID },
       data: { sessionVersion: { increment: 1 } },
+      select: { sessionVersion: true },
     });
+
+    // 2. GoTrue session kill: 1-second ban followed by an immediate unban.
+    expect(supabaseAdminMock.auth.admin.updateUserById).toHaveBeenCalledWith(
+      USER_ID,
+      { ban_duration: "1s" },
+    );
+    expect(supabaseAdminMock.auth.admin.updateUserById).toHaveBeenCalledWith(
+      USER_ID,
+      { ban_duration: "none" },
+    );
+
+    // 3. Claim sync so future tokens carry the new version.
+    expect(supabaseAdminMock.auth.admin.updateUserById).toHaveBeenCalledWith(
+      USER_ID,
+      { app_metadata: { amisibiz_session_version: 4 } },
+    );
   });
 });
 
@@ -525,9 +548,18 @@ describe("registerAction", () => {
     prismaMock.user.findUnique.mockResolvedValue(null);
     prismaMock.tenant.findUnique.mockResolvedValue(null);
     prismaMock.user.create.mockResolvedValue({ id: USER_ID });
-    prismaMock.tenant.create.mockResolvedValue({ id: TENANT_ID });
+    prismaMock.tenant.create.mockResolvedValue({
+      id: TENANT_ID,
+      slug: "amisi-co",
+    });
     prismaMock.tenantMember.create.mockResolvedValue({ id: "m1" });
-    prismaMock.accountToken.create.mockResolvedValue({ id: "t1" });
+    supabaseServerMock.auth.signUp.mockResolvedValue({
+      data: {
+        user: { id: USER_ID, identities: [{ id: "ident_1" }] },
+        session: { access_token: "test-access-token" },
+      },
+      error: null,
+    });
 
     const result = await registerAction({
       name: "Amisi Genuine",
@@ -538,9 +570,11 @@ describe("registerAction", () => {
     });
 
     expect(result.success).toBe(true);
+    // The app profile mirrors the Supabase Auth user id — never a
+    // client-supplied value.
     expect(prismaMock.user.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ platformRole: "USER" }),
+        data: expect.objectContaining({ id: USER_ID, platformRole: "USER" }),
       }),
     );
     expect(prismaMock.tenantMember.create).toHaveBeenCalledWith(

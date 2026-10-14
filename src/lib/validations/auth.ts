@@ -55,9 +55,14 @@ export const forgotPasswordSchema = z.object({
     .email("Please enter a valid email address"),
 });
 
-export const resetPasswordSchema = z
+/**
+ * Sets a new password for the currently signed-in user (Supabase Auth holds
+ * the session established by the recovery link — there is no token field;
+ * presenting a token here would be a client-supplied credential we cannot
+ * verify and must not trust).
+ */
+export const updatePasswordSchema = z
   .object({
-    token: z.string().min(1),
     password: z
       .string()
       .min(8, "Password must be at least 8 characters")
@@ -73,12 +78,7 @@ export const resetPasswordSchema = z
     path: ["confirmPassword"],
   });
 
-export const verifyEmailSchema = z.object({
-  token: z.string().min(1, "A verification token is required"),
-});
-
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
-export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
-export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+export type UpdatePasswordInput = z.infer<typeof updatePasswordSchema>;

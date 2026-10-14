@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TenantRole } from "@prisma/client";
 
 vi.mock("@/lib/db/prisma", () => import("./prisma-mock"));
-vi.mock("@/lib/auth/config", () => import("./auth-mock"));
+vi.mock("@/lib/auth/session-user", () => import("./auth-mock"));
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`REDIRECT:${url}`);
@@ -32,14 +32,11 @@ function primaryMembership(role: TenantRole) {
 beforeEach(() => {
   vi.clearAllMocks();
   authMock.mockResolvedValue({
-    user: {
-      id: USER_ID,
-      email: "owner@example.com",
-      name: "Owner",
-      platformRole: "USER",
-      status: "ACTIVE",
-    },
-    expires: new Date(Date.now() + 3600_000).toISOString(),
+    id: USER_ID,
+    email: "owner@example.com",
+    name: "Owner",
+    platformRole: "USER",
+    status: "ACTIVE",
   });
   prismaMock.auditLog.create.mockResolvedValue({ id: "log_1" });
 });

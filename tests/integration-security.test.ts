@@ -43,7 +43,6 @@ describeIfDb("Database-backed security integration tests", () => {
     await prisma.invitation.deleteMany();
     await prisma.tenantMember.deleteMany();
     await prisma.tenant.deleteMany();
-    await prisma.accountToken.deleteMany();
     await prisma.user.deleteMany();
   });
 
@@ -69,7 +68,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user1@test.com",
           name: "User 1",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -77,7 +75,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user2@test.com",
           name: "User 2",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -128,7 +125,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user1@test.com",
           name: "User 1",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -136,7 +132,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user2@test.com",
           name: "User 2",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -192,7 +187,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user@test.com",
           name: "User",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -263,7 +257,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "rls-actor@test.com",
           name: "RLS Actor",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -380,7 +373,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user@test.com",
           name: "User",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -421,7 +413,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user@test.com",
           name: "User",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -460,7 +451,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user@test.com",
           name: "User",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -517,7 +507,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "admin@test.com",
           name: "Admin",
-          password: "hash",
           status: "ACTIVE",
           platformRole: "PLATFORM_ADMIN",
         },
@@ -527,7 +516,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user@test.com",
           name: "User",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -561,7 +549,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user@test.com",
           name: "User",
-          password: "hash",
           status: "ACTIVE",
           sessionVersion: 0,
         },
@@ -597,7 +584,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user@test.com",
           name: "User",
-          password: "hash",
           status: "ACTIVE",
         },
       });
@@ -630,7 +616,6 @@ describeIfDb("Database-backed security integration tests", () => {
         data: {
           email: "user@test.com",
           name: "User",
-          password: "hash",
           status: "ACTIVE",
         },
       });

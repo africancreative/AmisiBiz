@@ -17,7 +17,7 @@ export function ForgotPasswordForm({ locale }: { locale: string }) {
     setPending(true);
     setError(null);
 
-    const result = await forgotPasswordAction({ email });
+    const result = await forgotPasswordAction({ email }, locale);
     setPending(false);
 
     if (!result.success) {

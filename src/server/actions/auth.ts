@@ -4,13 +4,19 @@ import { prisma } from "@/lib/db/prisma";
 import {
   registerSchema,
   forgotPasswordSchema,
-  resetPasswordSchema,
-  verifyEmailSchema,
+  loginSchema,
+  updatePasswordSchema,
 } from "@/lib/validations/auth";
 import { maskEmail } from "@/lib/utils";
-import { generateAccountToken, hashAccountToken } from "@/lib/auth/tokens";
-import { revokeUserSessions } from "@/lib/auth/session";
-import { sendEmail } from "@/lib/email";
+import {
+  readSessionVersionClaim,
+  revokeUserSessions,
+} from "@/lib/auth/session";
+import { getSessionUser } from "@/lib/auth/session-user";
+import {
+  createAdminSupabase,
+  createServerSupabase,
+} from "@/lib/supabase/server";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
 import { rateLimit, getClientIp } from "@/lib/security/rate-limit";
 import {
@@ -18,9 +24,26 @@ import {
   recordTenantCreated,
 } from "@/server/services/tenant-provisioning";
 import type { ActionResult } from "@/lib/errors";
-import bcrypt from "bcryptjs";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+/**
+ * Authentication actions, backed by Supabase Auth (GoTrue).
+ *
+ * Security invariants (see project constitution):
+ * - Credentials are only ever submitted server-side; the browser never holds
+ *   a Supabase client or token (cookies are httpOnly).
+ * - Authorization decisions never trust client-supplied ids, roles or status.
+ * - Handlers stay silent about account existence except where the user already
+ *   proved knowledge of the address (registration).
+ */
 
 const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+
+function appUrl(): string | undefined {
+  const url = process.env.NEXT_PUBLIC_APP_URL;
+  return url && url.length > 0 ? url.replace(/\/+$/, "") : undefined;
+}
 
 // Throttle sensitive auth operations by client IP.
 async function enforceAuthRateLimit(
@@ -33,26 +56,226 @@ async function enforceAuthRateLimit(
   return result.success;
 }
 
+type ServerSupabase = SupabaseClient;
+
 /**
- * Server Action: Register a new user and create their first tenant (organisation).
+ * Repairs drift between the access token's embedded session-version claim and
+ * the authoritative `User.sessionVersion` (possible when a revocation's
+ * GoTrue metadata sync failed). Writes the current version into app_metadata
+ * and rotates the session so the new token carries it.
+ */
+async function repairSessionVersionClaim(
+  supabase: ServerSupabase,
+  userId: string,
+  expectedVersion: number,
+  refreshToken: string,
+): Promise<boolean> {
+  try {
+    const admin = createAdminSupabase();
+    const { error: syncError } = await admin.auth.admin.updateUserById(userId, {
+      app_metadata: { amisibiz_session_version: expectedVersion },
+    });
+    if (syncError) throw syncError;
+
+    const { data, error: refreshError } = await supabase.auth.refreshSession({
+      refresh_token: refreshToken,
+    });
+    if (refreshError || !data.session) {
+      throw refreshError ?? new Error("Refresh returned no session");
+    }
+
+    return (
+      readSessionVersionClaim(data.session.access_token) === expectedVersion
+    );
+  } catch (error) {
+    console.error(
+      "[auth] Failed to repair the session-version claim for user",
+      userId,
+      error,
+    );
+    return false;
+  }
+}
+
+/**
+ * Server Action: Sign in with email and password.
  *
- * Security:
- * - Input validated with Zod before any DB operation.
- * - Password hashed with bcrypt (cost 12).
- * - User is created with the least-privileged platform role (USER) only; the
- *   action can never create a platform administrator.
- * - The creator becomes BUSINESS_OWNER of their own workspace.
- * - An email-verification token is issued; verification is enforced at login
- *   only when REQUIRE_EMAIL_VERIFICATION=true.
+ * After Supabase Auth accepts the credentials we re-check the app profile
+ * (status, session version) against our database — a token is never trusted
+ * on its own. Suspended accounts and revoked sessions are rejected here.
+ */
+export async function loginAction(
+  rawInput: unknown,
+): Promise<ActionResult<{ userId: string }>> {
+  const ip = (await getClientIp()) ?? "unknown";
+
+  const ipAllowed = await rateLimit(`login:ip:${ip}`, {
+    limit: 10,
+    windowMs: 10 * MINUTE_MS,
+  });
+  if (!ipAllowed.success) {
+    await recordAudit({
+      action: AUDIT_ACTIONS.AUTH_LOGIN_RATE_LIMITED,
+      ipAddress: ip,
+    });
+    return {
+      success: false,
+      error: "Too many attempts. Please try again later.",
+      code: "RATE_LIMITED",
+    };
+  }
+
+  const parsed = loginSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return { success: false, error: "Invalid email or password." };
+  }
+  const { email, password } = parsed.data;
+
+  const emailAllowed = await rateLimit(`login:email:${email}`, {
+    limit: 5,
+    windowMs: 10 * MINUTE_MS,
+  });
+  if (!emailAllowed.success) {
+    await recordAudit({
+      action: AUDIT_ACTIONS.AUTH_LOGIN_RATE_LIMITED,
+      metadata: { email: maskEmail(email) },
+      ipAddress: ip,
+    });
+    return {
+      success: false,
+      error: "Too many attempts. Please try again later.",
+      code: "RATE_LIMITED",
+    };
+  }
+
+  const supabase = await createServerSupabase();
+
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (error || !data.session || !data.user) {
+    await recordAudit({
+      action: AUDIT_ACTIONS.AUTH_SIGN_IN_FAILED,
+      metadata: { email: maskEmail(email) },
+      ipAddress: ip,
+    });
+    if (error?.code === "email_not_confirmed") {
+      return {
+        success: false,
+        error:
+          "Please confirm your email address first — check your inbox for the verification link.",
+      };
+    }
+    return { success: false, error: "Invalid email or password." };
+  }
+
+  const userId = data.user.id;
+
+  const profile = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, status: true, sessionVersion: true },
+  });
+
+  if (!profile) {
+    // GoTrue user without an app profile: never grant access to a half-made
+    // account. Compensating cleanup happens at registration time, not here.
+    await supabase.auth.signOut({ scope: "local" });
+    return { success: false, error: "Invalid email or password." };
+  }
+
+  if (profile.status !== "ACTIVE") {
+    await supabase.auth.signOut({ scope: "local" });
+    return {
+      success: false,
+      error: "Your account has been suspended. Contact support.",
+    };
+  }
+
+  const claimVersion = readSessionVersionClaim(data.session.access_token);
+  if (claimVersion !== profile.sessionVersion) {
+    const repaired = await repairSessionVersionClaim(
+      supabase,
+      userId,
+      profile.sessionVersion,
+      data.session.refresh_token,
+    );
+    if (!repaired) {
+      await supabase.auth.signOut({ scope: "local" });
+      return { success: false, error: "Sign in failed. Please try again." };
+    }
+  }
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.AUTH_SIGN_IN,
+    userId,
+    resource: "User",
+    resourceId: userId,
+    ipAddress: ip,
+  });
+
+  return { success: true, data: { userId } };
+}
+
+/**
+ * Server Action: Sign out of the current browser session. Only this device's
+ * session is ended (other devices are untouched by design).
+ */
+export async function logoutAction(): Promise<ActionResult> {
+  const supabase = await createServerSupabase();
+
+  const { data } = await supabase.auth.getUser();
+  const userId = data?.user?.id ?? null;
+
+  try {
+    await supabase.auth.signOut({ scope: "local" });
+  } catch (error) {
+    // An expired/missing session can make signOut throw; clearing cookies is
+    // still attempted by the client, and the middleware will not resurrect a
+    // dead token.
+    console.error("[logoutAction] local sign-out failed:", error);
+  }
+
+  if (userId) {
+    await recordAudit({
+      action: AUDIT_ACTIONS.AUTH_SIGN_OUT,
+      userId,
+      resource: "User",
+      resourceId: userId,
+    });
+  }
+
+  return { success: true };
+}
+
+/**
+ * Server Action: Register a new user (Supabase Auth) and create their first
+ * tenant (organisation) in one logical flow.
+ *
+ * - Identity is created by Supabase Auth; the app profile row mirrors it with
+ *   `id = <Supabase user UUID>` — never a client-supplied value.
+ * - When email confirmation is enabled, no session exists yet; the user must
+ *   confirm before signing in.
+ * - If provisioning fails after the Auth user was created, the Auth user is
+ *   deleted (compensating action) so the address can be retried.
  */
 export async function registerAction(
   rawInput: unknown,
-): Promise<ActionResult<{ userId: string; tenantId: string }>> {
+  locale = "en",
+): Promise<
+  ActionResult<{
+    userId: string;
+    tenantId: string;
+    emailConfirmationRequired: boolean;
+  }>
+> {
   const allowed = await enforceAuthRateLimit("register", 5, HOUR_MS);
   if (!allowed) {
     return {
       success: false,
       error: "Too many attempts. Please try again later.",
+      code: "RATE_LIMITED",
     };
   }
 
@@ -70,83 +293,118 @@ export async function registerAction(
 
   const { name, email, password, tenantName } = result.data;
 
-  try {
-    const existingUser = await prisma.user.findUnique({
-      where: { email },
-      select: { id: true },
-    });
-    if (existingUser) {
-      return {
-        success: false,
-        error: "An account with this email already exists.",
-        fieldErrors: { email: ["An account with this email already exists."] },
-      };
+  const duplicateEmail = (): ActionResult<never> => ({
+    success: false,
+    error: "An account with this email already exists.",
+    fieldErrors: { email: ["An account with this email already exists."] },
+  });
+
+  // Fast duplicate check against the mirror; Supabase Auth remains the
+  // authority and is re-checked below.
+  const existingUser = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  });
+  if (existingUser) {
+    return duplicateEmail();
+  }
+
+  const supabase = await createServerSupabase();
+  const baseUrl = appUrl();
+
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: { name },
+      ...(baseUrl
+        ? {
+            emailRedirectTo: `${baseUrl}/auth/callback?next=/${locale}/dashboard`,
+          }
+        : {}),
+    },
+  });
+
+  if (error) {
+    if (error.code === "user_already_exists" || error.status === 422) {
+      return duplicateEmail();
     }
+    console.error("[registerAction] Supabase sign-up failed:", error.message);
+    return {
+      success: false,
+      error: "Something went wrong. Please try again later.",
+    };
+  }
 
-    const hashedPassword = await bcrypt.hash(password, 12);
-    const { token: verifyToken, tokenHash } = generateAccountToken();
+  const authUser = data.user;
 
-    const { user, tenant } = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
+  // With email confirmation enabled, Supabase Auth obfuscates duplicate
+  // sign-ups: it returns a fake user with an EMPTY identities array instead
+  // of an error, to prevent account enumeration.
+  if (!authUser || (authUser.identities?.length ?? 0) === 0) {
+    return duplicateEmail();
+  }
+
+  try {
+    const { tenantId } = await prisma.$transaction(async (tx) => {
+      await tx.user.create({
         data: {
+          id: authUser.id,
           name,
           email,
-          password: hashedPassword,
           status: "ACTIVE",
           platformRole: "USER",
         },
-        select: { id: true },
       });
 
-      // Tenant is provisioned PENDING — an operator must activate it. Ownership
-      // is granted to the authenticated registrant, never from submitted data
-      // alone.
+      // Tenant is provisioned PENDING — an operator must activate it. The
+      // creator becomes BUSINESS_OWNER of their own workspace.
       const tenant = await provisionTenant(tx, {
         name: tenantName,
-        ownerUserId: user.id,
-      });
-
-      await tx.accountToken.create({
-        data: {
-          userId: user.id,
-          purpose: "EMAIL_VERIFICATION",
-          tokenHash,
-          expiresAt: new Date(Date.now() + 24 * HOUR_MS),
-        },
+        ownerUserId: authUser.id,
       });
 
       await tx.auditLog.create({
         data: {
-          userId: user.id,
+          userId: authUser.id,
           tenantId: tenant.tenantId,
           action: AUDIT_ACTIONS.AUTH_REGISTER,
           resource: "User",
-          resourceId: user.id,
+          resourceId: authUser.id,
         },
       });
 
       await recordTenantCreated(tx, {
         tenantId: tenant.tenantId,
-        userId: user.id,
+        userId: authUser.id,
         slug: tenant.slug,
       });
 
-      return {
-        user,
-        tenant: { id: tenant.tenantId },
-      };
+      return { tenantId: tenant.tenantId };
     });
 
-    // Best-effort email; never blocks registration. Not sent when unconfigured.
-    await sendEmail({
-      to: email,
-      subject: "Verify your AmisiBiz email address",
-      text: `Welcome to AmisiBiz. Verify your email using this token: ${verifyToken}`,
-    });
-
-    return { success: true, data: { userId: user.id, tenantId: tenant.id } };
+    return {
+      success: true,
+      data: {
+        userId: authUser.id,
+        tenantId,
+        emailConfirmationRequired: !data.session,
+      },
+    };
   } catch (err) {
-    console.error("[registerAction] Unexpected error:", err);
+    // Compensating action: remove the Auth user so the address is not stuck
+    // in a half-registered state.
+    try {
+      const admin = createAdminSupabase();
+      await admin.auth.admin.deleteUser(authUser.id);
+    } catch (cleanupError) {
+      console.error(
+        "[registerAction] Failed to compensate Auth user",
+        authUser.id,
+        cleanupError,
+      );
+    }
+    console.error("[registerAction] Provisioning failed:", err);
     return {
       success: false,
       error: "Something went wrong. Please try again later.",
@@ -155,14 +413,15 @@ export async function registerAction(
 }
 
 /**
- * Server Action: Request a password reset link.
+ * Server Action: Request a password reset email.
  *
- * Always returns success (identical shape and timing regardless of whether the
- * account exists) to prevent account enumeration. The raw token is only ever
- * sent by email; only its hash is stored.
+ * Always returns success (identical shape regardless of whether the account
+ * exists) to prevent account enumeration. The reset link is delivered by
+ * Supabase Auth and lands on our callback route.
  */
 export async function forgotPasswordAction(
   rawInput: unknown,
+  locale = "en",
 ): Promise<ActionResult> {
   const allowed = await enforceAuthRateLimit("forgot-password", 5, HOUR_MS);
   if (!allowed) {
@@ -180,36 +439,19 @@ export async function forgotPasswordAction(
   try {
     const user = await prisma.user.findUnique({
       where: { email },
-      select: { id: true, status: true, password: true },
+      select: { id: true, status: true },
     });
 
-    if (user && user.password && user.status === "ACTIVE") {
-      const { token, tokenHash } = generateAccountToken();
+    if (user && user.status === "ACTIVE") {
+      const supabase = await createServerSupabase();
+      const baseUrl = appUrl();
 
-      await prisma.$transaction([
-        // Invalidate any previously issued, unused reset tokens.
-        prisma.accountToken.updateMany({
-          where: {
-            userId: user.id,
-            purpose: "PASSWORD_RESET",
-            usedAt: null,
-          },
-          data: { usedAt: new Date() },
-        }),
-        prisma.accountToken.create({
-          data: {
-            userId: user.id,
-            purpose: "PASSWORD_RESET",
-            tokenHash,
-            expiresAt: new Date(Date.now() + HOUR_MS),
-          },
-        }),
-      ]);
-
-      await sendEmail({
-        to: email,
-        subject: "Reset your AmisiBiz password",
-        text: `Reset your password using this token: ${token}`,
+      await supabase.auth.resetPasswordForEmail(email, {
+        ...(baseUrl
+          ? {
+              redirectTo: `${baseUrl}/auth/callback?next=/${locale}/reset-password`,
+            }
+          : {}),
       });
 
       await recordAudit({
@@ -227,144 +469,79 @@ export async function forgotPasswordAction(
 }
 
 /**
- * Server Action: Complete a password reset.
- * Validates the single-use token, updates the password, and revokes all
- * existing sessions for the account.
+ * Server Action: Set a new password for the signed-in user.
+ *
+ * The recovery link establishes a session through `/auth/callback` first, so
+ * this action only accepts a new password — never a token. On success every
+ * session (including this one) is revoked and must sign in again.
  */
-export async function resetPasswordAction(
+export async function updatePasswordAction(
   rawInput: unknown,
 ): Promise<ActionResult> {
   const allowed = await enforceAuthRateLimit("reset-password", 10, HOUR_MS);
   if (!allowed) {
-    return { success: false, error: "Too many attempts. Try again later." };
+    return {
+      success: false,
+      error: "Too many attempts. Try again later.",
+      code: "RATE_LIMITED",
+    };
   }
 
-  const result = resetPasswordSchema.safeParse(rawInput);
-  if (!result.success) {
+  const parsed = updatePasswordSchema.safeParse(rawInput);
+  if (!parsed.success) {
     return {
       success: false,
       error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<
+      fieldErrors: parsed.error.flatten().fieldErrors as Record<
         string,
         string[]
       >,
     };
   }
 
-  const { token, password } = result.data;
-  const tokenHash = hashAccountToken(token);
+  // The caller must hold a live session (e.g. the recovery session created by
+  // the email link). Revoked or suspended accounts cannot set passwords.
+  const sessionUser = await getSessionUser();
+  if (!sessionUser) {
+    return {
+      success: false,
+      error:
+        "Your reset link is invalid or has expired. Request a new one and try again.",
+      code: "UNAUTHENTICATED",
+    };
+  }
 
+  const supabase = await createServerSupabase();
+  const { error } = await supabase.auth.updateUser({
+    password: parsed.data.password,
+  });
+
+  if (error) {
+    console.error("[updatePasswordAction] update failed:", error.message);
+    return {
+      success: false,
+      error: "Failed to update password. Please try again.",
+    };
+  }
+
+  // Clear THIS browser's cookies first, then kill every session for the
+  // account — the credential just changed, so nothing issued before now may
+  // remain usable (the ban also signs out every other device).
   try {
-    const record = await prisma.accountToken.findUnique({
-      where: { tokenHash },
-      select: {
-        id: true,
-        userId: true,
-        purpose: true,
-        usedAt: true,
-        expiresAt: true,
-      },
-    });
-
-    if (
-      !record ||
-      record.purpose !== "PASSWORD_RESET" ||
-      record.usedAt ||
-      record.expiresAt.getTime() < Date.now()
-    ) {
-      return {
-        success: false,
-        error: "This reset link is invalid or has expired.",
-      };
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: record.userId },
-        data: { password: hashedPassword },
-      }),
-      prisma.accountToken.update({
-        where: { id: record.id },
-        data: { usedAt: new Date() },
-      }),
-    ]);
-
-    await revokeUserSessions(record.userId);
-
-    await recordAudit({
-      action: AUDIT_ACTIONS.AUTH_PASSWORD_RESET,
-      userId: record.userId,
-      resource: "User",
-      resourceId: record.userId,
-    });
-
-    return { success: true };
-  } catch (err) {
-    console.error("[resetPasswordAction] error:", err);
-    return { success: false, error: "Failed to reset password." };
-  }
-}
-
-/**
- * Server Action: Verify an email address using a single-use token.
- */
-export async function verifyEmailAction(
-  rawInput: unknown,
-): Promise<ActionResult> {
-  const result = verifyEmailSchema.safeParse(rawInput);
-  if (!result.success) {
-    return { success: false, error: "A verification token is required." };
+    await supabase.auth.signOut({ scope: "local" });
+  } catch {
+    // Best effort: even if cookie clearing fails, the revocation below makes
+    // the remaining cookie unusable.
   }
 
-  const tokenHash = hashAccountToken(result.data.token);
+  await revokeUserSessions(sessionUser.id);
 
-  try {
-    const record = await prisma.accountToken.findUnique({
-      where: { tokenHash },
-      select: {
-        id: true,
-        userId: true,
-        purpose: true,
-        usedAt: true,
-        expiresAt: true,
-      },
-    });
+  await recordAudit({
+    action: AUDIT_ACTIONS.AUTH_PASSWORD_RESET,
+    userId: sessionUser.id,
+    resource: "User",
+    resourceId: sessionUser.id,
+  });
 
-    if (
-      !record ||
-      record.purpose !== "EMAIL_VERIFICATION" ||
-      record.usedAt ||
-      record.expiresAt.getTime() < Date.now()
-    ) {
-      return {
-        success: false,
-        error: "This verification link is invalid or has expired.",
-      };
-    }
-
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: record.userId },
-        data: { emailVerified: new Date() },
-      }),
-      prisma.accountToken.update({
-        where: { id: record.id },
-        data: { usedAt: new Date() },
-      }),
-    ]);
-
-    await recordAudit({
-      action: AUDIT_ACTIONS.AUTH_EMAIL_VERIFIED,
-      userId: record.userId,
-      resource: "User",
-      resourceId: record.userId,
-    });
-
-    return { success: true };
-  } catch (err) {
-    console.error("[verifyEmailAction] error:", err);
-    return { success: false, error: "Failed to verify email." };
-  }
+  return { success: true };
 }

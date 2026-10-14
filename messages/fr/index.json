@@ -49,6 +49,7 @@
       "error": {
         "invalid": "E-mail ou mot de passe invalide.",
         "suspended": "Votre compte a été suspendu. Contactez le support.",
+        "linkExpired": "Ce lien est invalide ou a expiré. Reconnectez-vous ou demandez-en un nouveau.",
         "generic": "Échec de la connexion. Veuillez réessayer."
       }
     },
@@ -70,6 +71,8 @@
       "loginLink": "Se connecter",
       "successTitle": "Compte créé!",
       "successSubtitle": "Vous pouvez maintenant vous connecter à AmisiBiz.",
+      "checkEmailTitle": "Vérifiez votre courriel",
+      "checkEmailSubtitle": "Nous avons envoyé un lien de vérification à votre boîte de réception. Confirmez-le, puis connectez-vous.",
       "terms": "En créant un compte, vous acceptez nos Conditions d'utilisation et notre Politique de confidentialité."
     },
     "forgotPassword": {

@@ -1,13 +1,17 @@
 import createMiddleware from "next-intl/middleware";
-import { auth } from "@/lib/auth/config";
+import { NextResponse, type NextRequest } from "next/server";
 import { routing } from "@/lib/i18n/routing";
+import {
+  createMiddlewareSupabase,
+  hasSupabaseAuthCookie,
+  type SupabaseCookieToSet,
+} from "@/lib/supabase/middleware";
 import {
   extractSubdomain,
   getBaseDomain,
   isReservedSubdomain,
   resolveRequestHost,
 } from "@/lib/tenancy/host";
-import { NextResponse } from "next/server";
 
 const i18nMiddleware = createMiddleware(routing);
 
@@ -73,14 +77,28 @@ function isStaticAsset(pathname: string): boolean {
   return STATIC_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
-export default auth((req) => {
-  const { pathname } = req.nextUrl;
+/** Copies Set-Cookie state from the refresh into a gate redirect. */
+function redirectKeepingAuthCookies(
+  target: URL,
+  cookiesToSet: SupabaseCookieToSet[],
+): NextResponse {
+  const response = NextResponse.redirect(target);
+  cookiesToSet.forEach(({ name, value, options }) => {
+    response.cookies.set(name, value, options);
+  });
+  return response;
+}
 
-  // Let Next.js handle internal routes and known static assets only.
+export default async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // Let Next.js handle internal routes, health checks, the auth callback and
+  // known static assets only. (`/auth/callback` must NOT pass through the
+  // i18n pipeline — it is not a locale-prefixed route.)
   if (
     pathname.startsWith("/_next") ||
-    pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/health") ||
+    pathname.startsWith("/auth/") ||
     isStaticAsset(pathname)
   ) {
     return NextResponse.next();
@@ -92,8 +110,8 @@ export default auth((req) => {
   const baseDomain = getBaseDomain();
   if (baseDomain) {
     const host = resolveRequestHost({
-      host: req.headers.get("host"),
-      forwardedHost: req.headers.get("x-forwarded-host"),
+      host: request.headers.get("host"),
+      forwardedHost: request.headers.get("x-forwarded-host"),
     });
     const subdomain = extractSubdomain(host, baseDomain);
     if (subdomain && isReservedSubdomain(subdomain)) {
@@ -101,34 +119,83 @@ export default auth((req) => {
     }
   }
 
-  // Apply i18n routing first
-  const i18nResponse = i18nMiddleware(req);
+  // Run i18n routing first. For a locale-prefixed request this passes through;
+  // otherwise next-intl returns a redirect (e.g. `/` → `/en`).
+  const i18nResponse = i18nMiddleware(request);
+  const isLocaleRedirect =
+    i18nResponse.status >= 300 && i18nResponse.status < 400;
 
-  // Session is provided by the Auth.js middleware wrapper
-  const session = req.auth;
+  // Supabase session refresh. Cookies Supabase rotates are collected here and
+  // applied to whichever response we end up returning — never dropped.
+  const refreshedCookies: SupabaseCookieToSet[] = [];
+  const refreshedHeaders: Record<string, string> = {};
+  const supabase = createMiddlewareSupabase(
+    request,
+    (cookiesToSet, headers) => {
+      refreshedCookies.push(...cookiesToSet);
+      Object.assign(refreshedHeaders, headers);
+    },
+  );
 
+  let userId: string | null = null;
+  if (hasSupabaseAuthCookie(request)) {
+    try {
+      const { data } = await supabase.auth.getUser();
+      userId = data?.user?.id ?? null;
+    } catch (error) {
+      // Auth service unreachable/erroring: fail closed (anonymous).
+      console.error("[middleware] Supabase getUser failed:", error);
+      userId = null;
+    }
+  }
+
+  // Locale-normalisation redirect: no downstream render happens, so attach any
+  // refreshed cookies and return it.
+  if (isLocaleRedirect) {
+    refreshedCookies.forEach(({ name, value, options }) => {
+      i18nResponse.cookies.set(name, value, options);
+    });
+    Object.keys(refreshedHeaders).forEach((key) => {
+      i18nResponse.headers.set(key, refreshedHeaders[key] ?? "");
+    });
+    return i18nResponse;
+  }
+
+  // Route gating uses the freshly validated user. Revocation (session-version)
+  // enforcement happens in server components/actions — this gate only keeps
+  // obviously anonymous traffic out of protected shells.
   const locale = pathname.split("/")[1] ?? "en";
-  const isAuthenticated = !!session?.user?.id;
 
-  // Redirect unauthenticated users away from protected routes
-  if (isProtectedRoute(pathname) && !isAuthenticated) {
-    const loginUrl = new URL(`/${locale}/login`, req.url);
+  if (isProtectedRoute(pathname) && !userId) {
+    const loginUrl = new URL(`/${locale}/login`, request.url);
     loginUrl.searchParams.set("callbackUrl", pathname);
-    return NextResponse.redirect(loginUrl);
+    return redirectKeepingAuthCookies(loginUrl, refreshedCookies);
   }
 
-  // Redirect authenticated users away from auth-only routes
-  if (isAuthOnlyRoute(pathname) && isAuthenticated) {
-    return NextResponse.redirect(new URL(`/${locale}/dashboard`, req.url));
+  if (isAuthOnlyRoute(pathname) && userId) {
+    return redirectKeepingAuthCookies(
+      new URL(`/${locale}/dashboard`, request.url),
+      refreshedCookies,
+    );
   }
 
-  return i18nResponse;
-});
+  // Pass-through: build the response AFTER the refresh so the cookies it
+  // rotated are also visible to this render (request-override), not only to
+  // the next request.
+  const response = NextResponse.next({ request });
+  refreshedCookies.forEach(({ name, value, options }) => {
+    response.cookies.set(name, value, options);
+  });
+  Object.keys(refreshedHeaders).forEach((key) => {
+    response.headers.set(key, refreshedHeaders[key] ?? "");
+  });
+  return response;
+}
 
 export const config = {
-  // Run middleware on the Node.js runtime: the Auth.js session callback reads
-  // from the database (user status re-check), which is not supported on Edge.
+  // Run middleware on the Node.js runtime: the Supabase session refresh and
+  // @supabase/ssr cookie handling expect the server runtime.
   runtime: "nodejs",
-  // Match all pathnames except static assets and api/auth
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|public/|api/auth).*)"],
+  // Match all pathnames except Next.js internals and static assets.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|public/).*)"],
 };

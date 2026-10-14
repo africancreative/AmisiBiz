@@ -1,12 +1,9 @@
 import { vi } from "vitest";
 
 /**
- * Shared Auth.js mock. Test files mock `@/lib/auth/config` with
- * `vi.mock("@/lib/auth/config", () => import("./auth-mock"))` and configure
- * `authMock` to return (or not) a session.
+ * Shared auth mock. Test files mock `@/lib/auth/session-user` with
+ * `vi.mock("@/lib/auth/session-user", () => import("./auth-mock"))` and
+ * configure `authMock` to resolve (or not) an `AppSessionUser`.
  */
 export const authMock = vi.fn();
-export const auth = authMock;
-export const handlers = {};
-export const signIn = vi.fn();
-export const signOut = vi.fn();
+export const getSessionUser = authMock;

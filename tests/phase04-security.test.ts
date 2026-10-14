@@ -22,7 +22,7 @@ import type { TenantRole } from "@prisma/client";
  */
 
 vi.mock("@/lib/db/prisma", () => import("./prisma-mock"));
-vi.mock("@/lib/auth/config", () => import("./auth-mock"));
+vi.mock("@/lib/auth/session-user", () => import("./auth-mock"));
 vi.mock("next/navigation", () => ({
   redirect: vi.fn((url: string) => {
     throw new Error(`REDIRECT:${url}`);
@@ -269,14 +269,11 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 
   authMock.mockResolvedValue({
-    user: {
-      id: USER_ID,
-      email: "owner@example.com",
-      name: "Owner",
-      platformRole: "USER",
-      status: "ACTIVE",
-    },
-    expires: new Date(Date.now() + 3600_000).toISOString(),
+    id: USER_ID,
+    email: "owner@example.com",
+    name: "Owner",
+    platformRole: "USER",
+    status: "ACTIVE",
   });
 
   prismaMock.$transaction.mockImplementation(async (arg: unknown) =>
@@ -2029,13 +2026,10 @@ describe("Phase 04 unauthenticated access", () => {
     // The tenant id is never trusted: membership is re-resolved for the session
     // user on every call, so an unrelated account cannot inherit an access grant.
     authMock.mockResolvedValue({
-      user: {
-        id: "cksomeoneelse000000001",
-        email: "attacker@example.com",
-        platformRole: "USER",
-        status: "ACTIVE",
-      },
-      expires: new Date(Date.now() + 3600_000).toISOString(),
+      id: "cksomeoneelse000000001",
+      email: "attacker@example.com",
+      platformRole: "USER",
+      status: "ACTIVE",
     });
     asRole("BUSINESS_OWNER");
 

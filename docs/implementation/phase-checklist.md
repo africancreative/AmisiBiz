@@ -1,6 +1,6 @@
 # AmisiBiz — Phased Implementation Checklist
 
-- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 05 documents schema + numbering deployed; next: **Phase 04.5 — constitution alignment**, then Phase 05 completion.
+- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 04.5a (Supabase Auth swap) complete and deployed; Phase 05 documents schema + numbering deployed; next: **Phase 04.5b — Turborepo monorepo + shared domain**, then Phase 05 completion.
 - **Companion docs:** `../architecture/repository-audit.md`, `../architecture/system-design.md`, `../architecture/security-model.md`, `phase-04-completion-report.md`, `phase-03.5-supabase-alignment-audit.md`
 
 Rules: implement **one phase at a time**; do not start a phase whose dependencies are unmet; every phase ends with the verification suite below green and a completion report.
@@ -12,12 +12,14 @@ Rules: implement **one phase at a time**; do not start a phase whose dependencie
 - **Engine:** Prisma Migrate against Supabase PostgreSQL.
 - **Connections:** migrations use `DIRECT_URL`; runtime uses pooled `DATABASE_URL` (`pgbouncer=true&connection_limit=1`).
 - **Baseline:** the chain is **applied and frozen** on the shared Supabase
-  project (2026-10-13/14) — six migrations in order:
+  project (2026-10-13/14) — seven migrations in order:
   `20261013000000_init`, `20261013000001_rls_policies_and_constraints`,
   `20261014000000_phase04_branding_contacts_and_catalogue`,
   `20261015000000_phase05_documents_and_numbering`,
   `20261015000001_narrow_app_role_on_prisma_bookkeeping`,
-  `20261016000000_rls_hardening_auth_tables_and_function_privileges`.
+  `20261016000000_rls_hardening_auth_tables_and_function_privileges`,
+  `20261017000000_supabase_auth_alignment` (04.5a — retires the Auth.js
+  tables/column).
   Applied files are immutable — checksum-frozen; corrections ship as new
   migrations (`prisma migrate status` verifies). The shared database already
   carried another application's `public.schema_migrations`, so a fresh
@@ -57,23 +59,19 @@ project**.
 
 ## 3. Minimum environment variables
 
-| Variable                                          | Local dev | Test                     | Vercel             | Notes                          |
-| ------------------------------------------------- | --------- | ------------------------ | ------------------ | ------------------------------ |
-| `NEXT_PUBLIC_APP_URL`                             | required  | —                        | required           | public; used by metadata/links |
-| `NEXT_PUBLIC_APP_NAME`                            | optional  | —                        | optional           | public                         |
-| `DATABASE_URL`                                    | required  | dummy (mocked)           | required           | pooled Supabase URL            |
-| `DIRECT_URL`                                      | required  | dummy                    | required           | direct URL for migrations      |
-| `AUTH_SECRET`                                     | required  | dummy (`tests/setup.ts`) | required           | ≥ 32 bytes                     |
-| `AUTH_URL`                                        | required  | —                        | optional (derived) | local dev only                 |
-| `AUTH_TRUST_HOST`                                 | optional  | —                        | as needed          | for non-Vercel hosts           |
-| `APP_BASE_DOMAIN` / `NEXT_PUBLIC_APP_BASE_DOMAIN` | optional  | —                        | required (routing) | tenant hostname base domain    |
-| `TRUST_PROXY`                                     | optional  | —                        | as needed          | trust `X-Forwarded-Host`       |
-| `SEED_*`, `ALLOW_PROD_SEED`                       | optional  | —                        | optional           | super-admin bootstrap          |
-| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | from 04.5a | dummy | required | browser-safe; auth + session refresh |
-| `SUPABASE_SECRET_KEY`                             | from 04.5a | dummy    | required           | **server-only** — never in a client bundle, log or error message |
-| `SMTP_*`, `EMAIL_FROM`                            | optional  | —                        | optional           | auth emails move to Supabase project config in 04.5a |
+| Variable                                                            | Local dev | Test           | Vercel             | Notes                                                            |
+| ------------------------------------------------------------------- | --------- | -------------- | ------------------ | ---------------------------------------------------------------- |
+| `NEXT_PUBLIC_APP_URL`                                               | required  | —              | required           | public; used by metadata/links                                   |
+| `NEXT_PUBLIC_APP_NAME`                                              | optional  | —              | optional           | public                                                           |
+| `DATABASE_URL`                                                      | required  | dummy (mocked) | required           | pooled Supabase URL                                              |
+| `DIRECT_URL`                                                        | required  | dummy          | required           | direct URL for migrations                                        |
+| `APP_BASE_DOMAIN` / `NEXT_PUBLIC_APP_BASE_DOMAIN`                   | optional  | —              | required (routing) | tenant hostname base domain                                      |
+| `TRUST_PROXY`                                                       | optional  | —              | as needed          | trust `X-Forwarded-Host`                                         |
+| `SEED_*`, `ALLOW_PROD_SEED`                                         | optional  | —              | optional           | super-admin bootstrap                                            |
+| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | required  | dummy          | required           | browser-safe; auth + session refresh                             |
+| `SUPABASE_SECRET_KEY`                                               | required  | dummy          | required           | **server-only** — never in a client bundle, log or error message |
 
-Tests run with mocks; `tests/setup.ts` supplies placeholder values. Never place real secrets in `.env.example` or client bundles. The `AUTH_*` rows belong to the Auth.js stack and are retired when Phase 04.5a lands; `SUPABASE_SECRET_KEY` never appears with a real value in `.env.example`, client bundles, logs or error messages.
+Tests run with mocks; `tests/setup.ts` supplies placeholder values. Never place real secrets in `.env.example` or client bundles. Auth emails are sent by the Supabase project (configure Site URL / redirect allow-list in the dashboard); `SUPABASE_SECRET_KEY` never appears with a real value in `.env.example`, client bundles, logs or error messages.
 
 ---
 
@@ -242,19 +240,30 @@ migration.`) plus applying the chain to a throwaway local cluster.
   04.5; the rest stay scheduled in Phases 04.5/08.
 - **Depends on:** Phase 03.
 
-### Phase 04.5 — Constitution alignment of existing code (NEXT)
+### Phase 04.5 — Constitution alignment of existing code (IN PROGRESS — 04.5a complete)
 
 - **Trigger:** the AmisiBiz master engineering constitution (2026-10-14)
   requires Supabase Auth/Storage, Turborepo, shadcn/ui, a shared TS domain
   layer and the Capacitor/Tauri/SQLite offline architecture. The owner
   instructed that existing code be aligned **before** further phases proceed.
 - **Sub-phases:**
-  - **04.5a — Supabase Auth swap:** replace the Auth.js credentials stack
-    (login/register/reset/session/revocation/middleware) with Supabase Auth
-    (`@supabase/ssr`); keep `User.sessionVersion` as the app-layer
-    authorization-freshness guard; retire obsolete auth tables in a forward
-    migration. Rules in force: local tenant status is never authoritative;
-    never claim an unverified flow works.
+  - **04.5a — Supabase Auth swap ✅ COMPLETE (2026-10-14):** Auth.js credentials
+    stack replaced by Supabase Auth (`@supabase/ssr`): login/register/logout/
+    password-reset via GoTrue; `/auth/callback` handles code+OTP email links
+    with a same-app-only redirect sanitiser; middleware refreshes the session
+    and gates protected routes fail-closed; `User.sessionVersion` remains the
+    app-layer freshness guard, now compared against the access token's
+    `app_metadata.amisibiz_session_version` claim, with revocation = DB bump →
+    GoTrue session kill (1s ban + unban) → claim sync (semantics live-verified
+    by probe). Migration `20261017000000` retires `Account`/`Session`/
+    `VerificationToken`/`AccountToken`/`User.password`; seed bootstraps the
+    GoTrue platform admin and re-identified the legacy row (FK-safe). Gates:
+    format/lint/type-check/tests (184 passed, 13 DB-backed skipped) /build all
+    green; migration applied to Supabase and verified (7/7, drift-free on a
+    fresh cluster); live sign-in with the seeded admin succeeded. Evidence:
+    `phase-04.5-constitution-alignment.md` §4. Known limits: email links need
+    the dashboard Site URL/redirect allow-list; PKCE links are same-device;
+    `REQUIRE_EMAIL_VERIFICATION` stays off until email delivery is verified.
   - **04.5b — Turborepo monorepo + shared domain package:** restructure to
     `apps/web` + `packages/domain` (pure calculation/lifecycle/numbering
     logic) so the Capacitor/Tauri clients can reuse it — lands before Phase 05
@@ -352,12 +361,11 @@ migration.`) plus applying the chain to a throwaway local cluster.
 
 ## 6. Immediate next action
 
-Phase 03.5 is complete and committed. Phase 05's schema/numbering layer is
-already deployed, but **implementation must not continue until the constitution
-alignment of the existing code (Phase 04.5) is executed** — starting with the
-Supabase Auth swap (04.5a), then the Turborepo/domain restructure (04.5b)
-before any Phase 05 service code is written. Branding (Phase 04) is explicitly
-out of scope for the alignment (owner decision, 2026-10-14).
+Phase 04.5a (Supabase Auth swap) is complete and deployed — see
+`phase-04.5-constitution-alignment.md` §4 for the execution record. Next:
+**04.5b — Turborepo monorepo + shared domain package**, executed before any
+Phase 05 service code is written. Branding (Phase 04) is explicitly out of
+scope for the alignment (owner decision, 2026-10-14).
 
 Carried into Phase 08 rather than left implicit: activating RLS (per-request
 `set_config`, connecting as `amisibiz_app`), distributed rate limiting, email

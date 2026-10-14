@@ -35,12 +35,6 @@ export const prismaMock = {
     updateMany: vi.fn(),
     groupBy: vi.fn(),
   },
-  accountToken: {
-    findUnique: vi.fn(),
-    create: vi.fn(),
-    update: vi.fn(),
-    updateMany: vi.fn(),
-  },
   auditLog: {
     create: vi.fn(),
   },

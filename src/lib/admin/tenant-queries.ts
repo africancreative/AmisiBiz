@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/db/prisma";
-import type { DocumentPeriodStyle, DocumentType, TenantStatus } from "@prisma/client";
+import type {
+  DocumentPeriodStyle,
+  DocumentType,
+  TenantStatus,
+} from "@prisma/client";
 
 /**
  * Platform-admin read models.

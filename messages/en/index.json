@@ -49,6 +49,7 @@
       "error": {
         "invalid": "Invalid email or password.",
         "suspended": "Your account has been suspended. Contact support.",
+        "linkExpired": "This link is invalid or has expired. Sign in again or request a new one.",
         "generic": "Sign in failed. Please try again."
       }
     },
@@ -70,6 +71,8 @@
       "loginLink": "Sign in",
       "successTitle": "Account created!",
       "successSubtitle": "You can now sign in to AmisiBiz.",
+      "checkEmailTitle": "Check your email",
+      "checkEmailSubtitle": "We've sent a verification link to your inbox. Confirm it, then sign in.",
       "terms": "By creating an account, you agree to our Terms of Service and Privacy Policy."
     },
     "forgotPassword": {

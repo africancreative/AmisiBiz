@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth/config";
 import { getPrimaryMembership } from "@/lib/auth/helpers";
+import { getSessionUser } from "@/lib/auth/session-user";
 import type { Permission } from "@/lib/auth/permissions";
 import {
   resolveTenantContext,
@@ -32,28 +32,28 @@ export async function getWorkspaceState(
   locale: string,
   permission?: Permission,
 ): Promise<WorkspaceState> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const user = await getSessionUser();
+  if (!user) {
     redirect(`/${locale}/login`);
   }
 
-  const membership = await getPrimaryMembership(session.user.id);
+  const membership = await getPrimaryMembership(user.id);
   if (!membership) {
     return { status: "no_workspace" };
   }
 
   try {
     const context = permission
-      ? await authorizeTenant(session.user.id, membership.tenantId, permission)
-      : await resolveTenantContext(session.user.id, membership.tenantId);
+      ? await authorizeTenant(user.id, membership.tenantId, permission)
+      : await resolveTenantContext(user.id, membership.tenantId);
 
     return {
       status: "ok",
       session: {
         user: {
-          id: session.user.id,
-          name: session.user.name ?? null,
-          email: session.user.email ?? null,
+          id: user.id,
+          name: user.name ?? null,
+          email: user.email ?? null,
         },
       },
       membership,

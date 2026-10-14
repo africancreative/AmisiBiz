@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
+import { loginAction } from "@/server/actions/auth";
 
 export function LoginForm({ locale }: { locale: string }) {
   const t = useTranslations("auth.login");
@@ -13,7 +13,11 @@ export function LoginForm({ locale }: { locale: string }) {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    searchParams.get("error") === "link_expired"
+      ? t("error.linkExpired")
+      : null,
+  );
   const [pending, setPending] = useState(false);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -21,14 +25,12 @@ export function LoginForm({ locale }: { locale: string }) {
     setPending(true);
     setError(null);
 
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
+    // Credentials go straight to the server action — the browser never holds
+    // a Supabase client or session token (cookies are httpOnly).
+    const result = await loginAction({ email, password });
 
-    if (!result || result.error) {
-      setError(t("error.invalid"));
+    if (!result.success) {
+      setError(result.error || t("error.generic"));
       setPending(false);
       return;
     }
