@@ -1,0 +1,912 @@
+// This is your Prisma schema file for AmisiBiz
+// Multi-tenant SaaS — Amisi Genuine Enterprises
+// Phase 1: Foundation — Auth, Tenants, RBAC
+//
+// Identity note: all primary keys are UUIDs (gen_random_uuid() on the
+// database side; application code may supply client-generated UUIDs for the
+// offline track). `User.id` equals the Supabase Auth user UUID.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+// Tenant lifecycle. A tenant is created PENDING (provisioned but not usable),
+// moves to ACTIVE only through the authorized platform activation workflow, and
+// may be SUSPENDED (data preserved) and later reactivated.
+//
+// Suspension semantics (Phase 2 owner decision): SUSPENDED denies online WRITES
+// and synchronization writes, while READS and downloads of already-issued
+// documents keep working for members and portal users. Business rows and
+// storage objects are never touched by a suspension, and existing sessions are
+// not killed — they become read-only and are refused on their next write. The
+// database enforces exactly this (`app_tenant_accepts_writes()` refuses a
+// suspended workspace and nothing else).
+// PENDING is a workspace that is provisioned but not yet usable: it is enforced
+// one layer up, by tenant-context resolution refusing any workspace operation
+// while PENDING, because provisioning itself writes into a PENDING row (initial
+// settings/branding/domain rows and the owner's invitation acceptance).
+enum TenantStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+
+// Provider-facing subscription plans. INFORMATIONAL ONLY: no price, no quota,
+// no limit and no expiry lives here, because the Phase 2 directive states
+// plainly that "the MVP uses manual provider-controlled activation and
+// suspension" and forbids suspending a tenant because a payment is overdue.
+// A plan label is what an authorized operator records about a commercial
+// arrangement; it grants no access and enforces nothing. ARCHIVED plans stay
+// readable on the tenants that hold them but cannot be newly assigned.
+enum PlanStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  INVITED
+  SUSPENDED
+}
+
+// Platform domain — Amisi Genuine internal staff. Kept strictly separate from
+// tenant roles: a platform role NEVER grants tenant business data access on
+// its own (support staff need an explicit, expiring SupportAccessGrant).
+// NULL on User.platformRole means "no platform privileges" (the default).
+enum PlatformRole {
+  SUPER_ADMIN // Amisi Genuine internal administration
+  SUPPORT // Customer support — no permissions without a support grant
+}
+
+// Tenant domain — roles within a customer's business workspace (the 9-role
+// model of the Phase 1 directive). Deny-by-default: the schema default is the
+// least-privileged role.
+enum TenantRole {
+  TENANT_OWNER // Owns the workspace; sole granter of the owner role
+  TENANT_ADMIN // Routine operations, settings and member management (guarded)
+  SALES // Contacts, catalogue and quotations
+  FINANCE // Invoices, payments and financial exports
+  OPERATIONS // Catalogue operations and delivery notes
+  VIEWER // Read-only access to explicitly permitted information
+  CUSTOMER_PORTAL_USER // Customer portal only; never internal records
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+// ─── Tenant (Organisation) ────────────────────────────────────────────────────
+
+model Tenant {
+  id       String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid // Immutable internal ID
+  name     String // Business display name
+  slug     String       @unique // URL-safe workspace slug e.g. "acme"
+  logoUrl  String?
+  status   TenantStatus @default(PENDING) // PENDING until activated
+  country  String? // ISO 3166-1 alpha-2
+  currency String       @default("KES") // ISO 4217
+  timezone String       @default("UTC")
+  locale   String       @default("en") // Default locale for tenant
+  planId   String?      @db.Uuid // Provider-recorded plan label (informational; never an entitlement)
+
+  // Lifecycle metadata (activation / suspension)
+  activatedAt      DateTime?
+  activatedById    String?   @db.Uuid
+  suspendedAt      DateTime?
+  suspendedById    String?   @db.Uuid
+  suspensionReason String?
+
+  // Operational indicators (Phase 2 provider console). Written ONLY through the
+  // narrow definer functions `touch_tenant_activity` /
+  // `record_tenant_sync_attempt`, so no ordinary write path can stamp them and
+  // no policy has to be widened to let one. NULL means "never recorded" — which
+  // for `lastSyncAt` is the expected state today, because the MVP has no sync
+  // transport yet and the console must say so rather than imply freshness.
+  // An offline device is invisible until it next connects and is refused.
+  lastActivityAt    DateTime?
+  lastSyncAt        DateTime?
+  lastSyncErrorCode String?
+
+  // Who provisioned the tenant (self-service registration or platform
+  // operator). Used by RLS to let a registrant create their own owner
+  // membership — and nobody else's.
+  createdById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  createdBy            User?                    @relation("TenantCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  activatedBy          User?                    @relation("TenantActivatedBy", fields: [activatedById], references: [id], onDelete: SetNull)
+  suspendedBy          User?                    @relation("TenantSuspendedBy", fields: [suspendedById], references: [id], onDelete: SetNull)
+  plan                 Plan?                    @relation("TenantPlan", fields: [planId], references: [id], onDelete: SetNull)
+  members              TenantMember[]
+  invitations          Invitation[]
+  auditLogs            AuditLog[]
+  statusHistory        TenantStatusHistory[]
+  supportGrants        SupportAccessGrant[]
+  settings             TenantSettings?
+  branding             TenantBranding?
+  domains              TenantDomain[]
+  contacts             Contact[]
+  taxCategories        TaxCategory[]
+  taxRates             TaxRate[]
+  items                Item[]
+  contactItems         ContactItem[]
+  documents            Document[]
+  documentLines        DocumentLine[]
+  documentPayments     DocumentPayment[]
+  documentStatusEvents DocumentStatusEvent[]
+  documentNumberings   DocumentNumbering[]
+  documentSequences    DocumentNumberSequence[]
+
+  @@index([slug])
+  @@index([status])
+  @@index([planId])
+  @@index([lastActivityAt])
+  @@index([createdById])
+  @@index([activatedById])
+  @@index([suspendedById])
+}
+
+// ─── Subscription plans (provider-side labels) ───────────────────────────────
+// Deliberately information-only: the `Plan` catalog carries a code, a display
+// name, a description and an ordering, and nothing else. There is no price
+// column (billing is not modelled in this product yet), no limit column (no
+// feature is gated on a plan) and no status column on any tenant-facing
+// behaviour (an overdue arrangement must NEVER auto-suspend — the Phase 2
+// directive). Plans are seeded and edited by migrations/operator tooling; the
+// runtime role holds SELECT only, and the RLS policy restricts reads to
+// platform admins, so a tenant can never enumerate or pick its own plan.
+
+model Plan {
+  id          String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String     @unique // stable machine label, e.g. "standard"
+  name        String // display name, e.g. "Amisi Genuine Standard"
+  description String
+  status      PlanStatus @default(ACTIVE)
+  sortOrder   Int        @default(0)
+
+  tenants Tenant[] @relation("TenantPlan")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, sortOrder])
+}
+
+// ─── Tenant settings (per-tenant configuration) ───────────────────────────────
+// Initialised with defaults on provisioning.
+//
+// Document numbering deliberately does NOT live here any more. The Phase 03
+// stub (`documentPrefix` / `documentNextNumber` / `quotationPrefix`) was a single
+// counter that could not hold a series per document type and per period, so it
+// has been replaced by `DocumentNumbering` + `DocumentNumberSequence`. Keeping
+// both would have meant two sources of truth for an authoritative number.
+
+model TenantSettings {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String @unique @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ─── Tenant branding (used on the tenant's own documents only) ────────────────
+
+model TenantBranding {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String   @unique @db.Uuid
+  displayName         String?
+  registeredName      String?
+  primaryColor        String   @default("#1d4ed8")
+  secondaryColor      String   @default("#1e3a5f")
+  accentColor         String   @default("#f59e0b")
+  primaryForeground   String   @default("#f8fafc")
+  logoUrl             String?
+  contactEmail        String?
+  contactPhone        String?
+  postalAddress       String?
+  physicalAddress     String?
+  website             String?
+  taxPin              String?
+  currency            String   @default("KES")
+  defaultFooter       String?
+  paymentInstructions String?
+  documentLayout      String   @default("standard")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ─── Tenant hostname mapping (subdomain routing) ──────────────────────────────
+// Maps a full hostname (e.g. "acme.amisigenuine.com") to a tenant. Multiple
+// hostnames may map to one tenant; exactly one should be primary.
+
+model TenantDomain {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String    @db.Uuid
+  hostname   String    @unique
+  isPrimary  Boolean   @default(false)
+  verifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([hostname])
+}
+
+// ─── Tenant status history (append-only lifecycle log) ────────────────────────
+// One row per lifecycle transition (created PENDING, activated, suspended,
+// reactivated). `changedById` is null for system transitions.
+
+model TenantStatusHistory {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String        @db.Uuid
+  fromStatus  TenantStatus?
+  toStatus    TenantStatus
+  changedById String?       @db.Uuid
+  reason      String?
+  createdAt   DateTime      @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  changedBy User?  @relation("TenantStatusChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, createdAt])
+}
+
+// ─── Permission catalogue (RLS/RBAC parity with the code matrix) ──────────────
+// The permission catalogue and role→permission matrix are defined in code
+// (`packages/auth/src/permissions.ts`) and mirrored into these tables by
+// migration. An integration test asserts the two are identical in both
+// directions, so the database copy can never silently drift.
+
+model Permission {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  key         String   @unique // e.g. "contacts.read", "platform.tenants.activate"
+  domain      String // "platform" | "tenant"
+  area        String // e.g. "contacts", "documents.invoice", "tenants"
+  description String
+  createdAt   DateTime @default(now())
+
+  rolePermissions RolePermission[]
+
+  @@index([domain])
+  @@index([area])
+}
+
+model RolePermission {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roleKey      String // enum member name, e.g. "TENANT_OWNER", "SUPER_ADMIN"
+  domain       String // "platform" | "tenant"
+  permissionId String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleKey, permissionId])
+  @@index([roleKey])
+  @@index([permissionId])
+}
+
+// ─── Provider support access grants ───────────────────────────────────────────
+// Provider support staff hold no tenant permissions by default. Access to a
+// tenant's business data is only possible through an explicit grant created
+// by a platform super admin: time-boxed (expiresAt), revocable (revokedAt) and
+// audited on every use. Grants confer read-only access (enforced at the
+// database level as well — support never gets the write policy path).
+
+model SupportAccessGrant {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String    @db.Uuid
+  platformUserId String    @db.Uuid
+  grantedById    String?   @db.Uuid
+  reason         String // Business justification — required, never empty
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  platformUser User   @relation("SupportGrantsReceived", fields: [platformUserId], references: [id], onDelete: Cascade)
+  grantedBy    User?  @relation("SupportGrantsIssued", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([platformUserId])
+  @@index([platformUserId, tenantId])
+}
+
+// ─── Contact types ────────────────────────────────────────────────────────────
+
+enum ContactType {
+  INDIVIDUAL
+  BUSINESS
+}
+
+enum ContactStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+// ─── Tax configuration (explicit, not implicit) ───────────────────────────────
+
+model TaxCategory {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @db.Uuid
+  name        String // e.g. "VAT", "WHT", "EXEMPT"
+  description String?
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rates  TaxRate[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model TaxRate {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String    @db.Uuid
+  categoryId    String    @db.Uuid
+  name          String // e.g. "VAT 16%"
+  rate          Decimal   @db.Decimal(5, 4) // e.g. 0.1600 for 16%
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category      TaxCategory    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  items         Item[]
+  documentLines DocumentLine[]
+
+  @@unique([tenantId, categoryId, name, effectiveFrom])
+  @@index([tenantId])
+  @@index([categoryId])
+  @@index([effectiveFrom])
+}
+
+// ─── Contacts CRM ─────────────────────────────────────────────────────────────
+
+model Contact {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String        @db.Uuid
+  type        ContactType   @default(INDIVIDUAL)
+  status      ContactStatus @default(ACTIVE)
+  firstName   String?
+  lastName    String?
+  companyName String?
+  email       String?
+  phone       String?
+  mobile      String?
+  taxPin      String?
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  archivedAt  DateTime?
+
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  addresses    ContactAddress[]
+  contactItems ContactItem[]
+  documents    Document[] // Future: document history
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, email])
+  @@index([tenantId, phone])
+  @@index([tenantId, companyName])
+  @@index([tenantId, createdAt])
+}
+
+model ContactAddress {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contactId  String   @db.Uuid
+  type       String // "POSTAL" | "PHYSICAL"
+  line1      String
+  line2      String?
+  city       String?
+  state      String?
+  postalCode String?
+  country    String? // ISO 3166-1 alpha-2
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@index([contactId, type])
+}
+
+// ─── Items & Services Catalogue ───────────────────────────────────────────────
+
+enum ItemType {
+  PRODUCT
+  SERVICE
+}
+
+enum ItemStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Item {
+  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String     @db.Uuid
+  type          ItemType   @default(PRODUCT)
+  status        ItemStatus @default(ACTIVE)
+  name          String
+  sku           String?
+  description   String?
+  unitOfMeasure String     @default("each")
+  unitPrice     Decimal    @db.Decimal(18, 4) // Minor-unit model: stored as major units with 4dp precision
+  currency      String     @default("KES")
+  taxRateId     String?    @db.Uuid
+  notes         String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  taxRate       TaxRate?       @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  contactItems  ContactItem[]
+  documentLines DocumentLine[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@index([tenantId, name])
+}
+
+// ─── Customer-specific item catalogue ─────────────────────────────────────────
+
+model ContactItem {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String   @db.Uuid
+  contactId       String   @db.Uuid
+  itemId          String   @db.Uuid
+  customCode      String? // Customer-specific item code
+  customName      String? // Customer-specific description
+  agreedPrice     Decimal  @db.Decimal(18, 4) // Override price for this customer
+  discountPercent Decimal  @default(0) @db.Decimal(5, 2) // e.g. 10.00 for 10%
+  isAvailable     Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  item    Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, contactId, itemId])
+  @@index([tenantId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, itemId])
+}
+
+// ─── Documents (Phase 05) ─────────────────────────────────────────────────────
+//
+// One table carries all three sales document types because they share almost
+// everything: numbering, tenant scoping, line snapshots, totals, issuance and
+// audit. What differs is expressed as data — `type`, the allowed status set and
+// the date fields that apply — never as three parallel tables that can drift
+// apart.
+//
+// Two invariants the whole module rests on:
+//
+//   1. A DRAFT is editable and has no number. The number is allocated inside the
+//      issuance transaction, so abandoned or deleted drafts never burn a number
+//      and an issued number is never reused.
+//   2. An ISSUED document is immutable. Its lines, prices, tax, totals, branding
+//      and customer details are frozen (`snapshot`) at issuance, and a database
+//      trigger refuses any write that would change a financially material field.
+//      Corrections happen by voiding or by issuing a replacement that keeps the
+//      original row.
+
+enum DocumentType {
+  QUOTATION
+  INVOICE
+  DELIVERY_NOTE
+}
+
+// The union of all three lifecycles. Which subset applies to a given type is
+// enforced by a CHECK constraint in the database and by the state machine in
+// `src/server/services/documents/lifecycle.ts` — never by the status arriving
+// from the browser.
+enum DocumentStatus {
+  DRAFT
+  ISSUED
+  ACCEPTED // QUOTATION
+  REJECTED // QUOTATION
+  EXPIRED // QUOTATION
+  CANCELLED // QUOTATION, DELIVERY_NOTE
+  PARTIALLY_PAID // INVOICE, derived from recorded payments
+  PAID // INVOICE, derived from recorded payments
+  OVERDUE // INVOICE
+  VOID // INVOICE
+  PARTIALLY_DELIVERED // DELIVERY_NOTE source accounting
+  DELIVERED // DELIVERY_NOTE
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  MOBILE_MONEY
+  CARD
+  CHEQUE
+  OTHER
+}
+
+enum DocumentDiscountType {
+  PERCENT
+  AMOUNT
+}
+
+// How a document series restarts. `NONE` gives one ever-increasing series per
+// tenant and type; calendar and financial years give a fresh series each period,
+// which is what the prefix examples in the brief (`INV-2026-0001`) describe.
+enum DocumentPeriodStyle {
+  NONE
+  CALENDAR_YEAR
+  FINANCIAL_YEAR
+}
+
+model Document {
+  id       String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String         @db.Uuid
+  type     DocumentType
+  status   DocumentStatus @default(DRAFT)
+  // Null while the document is a draft; allocated on issuance.
+  number   String?
+  currency String         @default("KES")
+
+  contactId        String? @db.Uuid
+  sourceDocumentId String? @db.Uuid // quotation -> invoice, sales document -> delivery note
+  replacementOfId  String? @db.Uuid // correction document that replaces a voided one
+  // Client-supplied key that makes a retried conversion/issue return the same
+  // document instead of creating a second one.
+  idempotencyKey   String?
+
+  // ── Dates. `issuedAt` is when the document was issued (system time);
+  // `issueDate` is the date printed on it — a back-dated invoice is a business
+  // decision, so both are kept.
+  issueDate    DateTime  @default(now())
+  dueDate      DateTime?
+  expiryDate   DateTime?
+  deliveryDate DateTime?
+  deliveryNote String?
+  issuedAt     DateTime?
+  issuedById   String?   @db.Uuid
+  voidedAt     DateTime?
+  voidReason   String?
+  voidedById   String?   @db.Uuid
+
+  // ── Customer-facing text
+  customerNote String?
+  terms        String?
+
+  // ── Stored breakdown (see `documents/calculations.ts`). Consistency between
+  // these five columns is a database CHECK, not a convention.
+  subtotal       Decimal @default(0) @db.Decimal(18, 4)
+  totalDiscount  Decimal @default(0) @db.Decimal(18, 4)
+  taxableBase    Decimal @default(0) @db.Decimal(18, 4)
+  taxTotal       Decimal @default(0) @db.Decimal(18, 4)
+  total          Decimal @default(0) @db.Decimal(18, 4)
+  // Per-rate grouping, e.g. [{ name: "VAT 16%", rate: "0.1600", base: "...", amount: "..." }]
+  taxBreakdown   Json?
+  // Rounding policy applied when the totals were computed, recorded so a
+  // document issued under a future policy change stays reproducible.
+  roundingPolicy String  @default("half-up-per-line-v1")
+
+  // Frozen business/customer/line data captured at issuance. The PDF renders
+  // from this, so later contact, branding or catalogue edits cannot rewrite an
+  // issued document.
+  snapshot   Json?
+  snapshotAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact          Contact?              @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  sourceDocument   Document?             @relation("DocumentDerivation", fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+  derivedDocuments Document[]            @relation("DocumentDerivation")
+  replacementOf    Document?             @relation("DocumentReplacement", fields: [replacementOfId], references: [id], onDelete: Restrict)
+  replacements     Document[]            @relation("DocumentReplacement")
+  issuedBy         User?                 @relation("DocumentIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+  voidedBy         User?                 @relation("DocumentVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
+  lines            DocumentLine[]
+  payments         DocumentPayment[]
+  statusEvents     DocumentStatusEvent[]
+
+  @@unique([tenantId, type, number])
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, status])
+  @@index([tenantId, type, status])
+  @@index([tenantId, issuedAt])
+  @@index([tenantId, dueDate])
+  @@index([tenantId, sourceDocumentId])
+}
+
+model DocumentLine {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String @db.Uuid
+  documentId String @db.Uuid
+  position   Int
+
+  // Provenance only — the printed line always comes from the snapshot columns
+  // below, never from the current catalogue.
+  itemId       String? @db.Uuid
+  // For a delivery note, the source document line this line delivers against.
+  sourceLineId String? @db.Uuid
+
+  description   String
+  itemCode      String?
+  unitOfMeasure String  @default("each")
+
+  quantity        Decimal               @db.Decimal(18, 4)
+  unitPrice       Decimal               @db.Decimal(18, 4)
+  discountType    DocumentDiscountType?
+  discountPercent Decimal               @default(0) @db.Decimal(5, 2)
+  discountAmount  Decimal               @default(0) @db.Decimal(18, 4)
+  lineTotal       Decimal               @db.Decimal(18, 4) // quantity x price, rounded
+  lineDiscount    Decimal               @default(0) @db.Decimal(18, 4)
+  lineNet         Decimal               @db.Decimal(18, 4) // lineTotal - lineDiscount
+  lineTax         Decimal               @default(0) @db.Decimal(18, 4)
+
+  // Tax snapshot. `taxRateId` records where the rate came from; the fraction and
+  // label are copied so a retired rate cannot change an old document.
+  taxRateId String? @db.Uuid
+  taxName   String?
+  taxRate   Decimal @default(0) @db.Decimal(5, 4)
+
+  // Running total delivered against this line (source documents only).
+  deliveredQuantity Decimal @default(0) @db.Decimal(18, 4)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document   Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  item       Item?          @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  taxRateRef TaxRate?       @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  sourceLine DocumentLine?  @relation("DeliveryAgainst", fields: [sourceLineId], references: [id], onDelete: Restrict)
+  deliveries DocumentLine[] @relation("DeliveryAgainst")
+
+  @@unique([tenantId, documentId, position])
+  @@index([tenantId])
+  @@index([tenantId, itemId])
+}
+
+model DocumentPayment {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String @db.Uuid
+  documentId String @db.Uuid
+
+  amount     Decimal       @db.Decimal(18, 4)
+  occurredOn DateTime
+  method     PaymentMethod @default(BANK_TRANSFER)
+  reference  String?
+  note       String?
+  // Reversing a payment never deletes it: the row stays with its reversal
+  // metadata so the balance history is auditable.
+  reversedAt DateTime?
+  reversedBy String?       @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document       Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  reversedByUser User?    @relation("DocumentPaymentReversedBy", fields: [reversedBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, documentId])
+  @@index([tenantId, occurredOn])
+}
+
+// Append-only transition log: who moved which document to which status, when,
+// and why. This is the audit trail the lifecycle needs on top of `AuditLog`.
+model DocumentStatusEvent {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String @db.Uuid
+  documentId String @db.Uuid
+
+  fromStatus DocumentStatus?
+  toStatus   DocumentStatus
+  reason     String?
+  actorId    String?         @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  actor    User?    @relation("DocumentStatusEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, documentId])
+  @@index([tenantId, createdAt])
+}
+
+// ─── Document numbering configuration and counters ────────────────────────────
+
+// One row per tenant per document type: what the number looks like.
+model DocumentNumbering {
+  id       String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String       @db.Uuid
+  type     DocumentType
+
+  prefix           String              @default("")
+  padding          Int                 @default(4)
+  separator        String              @default("-")
+  periodStyle      DocumentPeriodStyle @default(CALENDAR_YEAR)
+  // Only read when periodStyle is FINANCIAL_YEAR: the month the tenant's books
+  // start in (1 = January). A financial year is written "2026/27", i.e. the
+  // calendar year it begins in.
+  fiscalStartMonth Int                 @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sequences DocumentNumberSequence[]
+
+  @@unique([tenantId, type])
+  @@index([tenantId])
+}
+
+// The counter itself, one row per (tenant, type, period). Allocation happens in
+// `allocate_document_number()` under `SELECT ... FOR UPDATE`, which is what makes
+// concurrent issuing safe; the unique index on the document number is the
+// backstop if the lock is ever bypassed.
+model DocumentNumberSequence {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String       @db.Uuid
+  type      DocumentType
+  // e.g. "2026" (calendar), "2026/27" (financial) or "" (no period).
+  period    String       @default("")
+  nextValue Int          @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  numbering DocumentNumbering @relation(fields: [tenantId, type], references: [tenantId, type], onDelete: Cascade)
+
+  @@unique([tenantId, type, period])
+  @@index([tenantId])
+}
+
+// ─── User profile (identity authority: Supabase Auth) ────────────────────────
+
+// Identity authority is Supabase Auth (GoTrue). This profile row mirrors the
+// app-relevant facts (role, status, revocation version); `id` MUST equal the
+// Supabase Auth user UUID — it is assigned from the Auth user at registration,
+// never generated here.
+model User {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String?
+  email          String        @unique
+  emailVerified  DateTime?
+  image          String?
+  // NULL = no platform privileges (the default). Platform roles never grant
+  // tenant business data access on their own.
+  platformRole   PlatformRole?
+  status         UserStatus    @default(ACTIVE)
+  // Incremented to revoke every existing Supabase session for this user
+  // (password change, forced logout, membership/role compromise). The current
+  // value is mirrored into the access token's app_metadata claim; a session is
+  // valid only while the two match.
+  sessionVersion Int           @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Application relations
+  tenantMemberships     TenantMember[]
+  auditLogs             AuditLog[]
+  tenantsCreated        Tenant[]              @relation("TenantCreatedBy")
+  tenantsActivated      Tenant[]              @relation("TenantActivatedBy")
+  tenantsSuspended      Tenant[]              @relation("TenantSuspendedBy")
+  tenantStatusChanges   TenantStatusHistory[] @relation("TenantStatusChangedBy")
+  supportGrantsReceived SupportAccessGrant[]  @relation("SupportGrantsReceived")
+  supportGrantsIssued   SupportAccessGrant[]  @relation("SupportGrantsIssued")
+  documentsIssued       Document[]            @relation("DocumentIssuedBy")
+  documentsVoided       Document[]            @relation("DocumentVoidedBy")
+  paymentsReversed      DocumentPayment[]     @relation("DocumentPaymentReversedBy")
+  documentStatusEvents  DocumentStatusEvent[] @relation("DocumentStatusEventActor")
+
+  @@index([email])
+  @@index([platformRole])
+  @@index([sessionVersion])
+}
+
+// ─── Tenant Membership (many-to-many User ↔ Tenant) ──────────────────────────
+
+model TenantMember {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String     @db.Uuid
+  userId    String     @db.Uuid
+  role      TenantRole @default(VIEWER)
+  isDefault Boolean    @default(false) // Which tenant is active when user logs in
+  joinedAt  DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@index([tenantId])
+}
+
+// ─── Invitations ──────────────────────────────────────────────────────────────
+// Only a SHA-256 hash of the token is persisted; the raw token is sent via email.
+
+model Invitation {
+  id         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String           @db.Uuid
+  email      String
+  role       TenantRole       @default(VIEWER)
+  tokenHash  String           @unique // SHA-256 hash of the invitation token
+  status     InvitationStatus @default(PENDING)
+  invitedBy  String           @db.Uuid // userId of inviter
+  expiresAt  DateTime
+  acceptedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@index([tokenHash])
+  @@index([tenantId])
+  @@index([email])
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String? @db.Uuid // null for system-level events
+  userId     String? @db.Uuid // null for system events
+  action     String // e.g. "tenant.created", "user.invited", "invoice.approved"
+  resource   String? // e.g. "Invoice", "User"
+  resourceId String? // ID of the affected record (polymorphic — intentionally not an FK)
+  metadata   Json? // Additional context (sanitised, no PII unless required)
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  // The provider console's per-tenant read ("latest activity for these tenants")
+  // groups by tenant over a descending time ordering, so the index carries the
+  // sort order the query actually uses (migration 11, section 7).
+  @@index([tenantId, createdAt(sort: Desc)], map: "AuditLog_tenantId_createdAt_idx")
+}
