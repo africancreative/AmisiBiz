@@ -8,9 +8,10 @@
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'amisibiz_app') THEN
-        -- Use a strong, randomly generated password in production
-        -- Generate with: openssl rand -base64 32
-        CREATE ROLE amisibiz_app NOINHERIT LOGIN PASSWORD 'CHANGE_ME_IN_PRODUCTION';
+        -- Created password-less on purpose: never ship a placeholder password
+        -- to a login role. Set a strong one before first use:
+        --   ALTER ROLE amisibiz_app PASSWORD '<openssl rand -base64 32>';
+        CREATE ROLE amisibiz_app NOINHERIT LOGIN;
         RAISE NOTICE 'Created role amisibiz_app';
     ELSE
         RAISE NOTICE 'Role amisibiz_app already exists';

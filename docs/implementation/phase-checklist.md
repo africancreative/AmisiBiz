@@ -1,7 +1,7 @@
 # AmisiBiz — Phased Implementation Checklist
 
-- **Status:** Active plan (Phases 00–04 complete)
-- **Companion docs:** `../architecture/repository-audit.md`, `../architecture/system-design.md`, `../architecture/security-model.md`, `phase-04-completion-report.md`
+- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 05 documents schema + numbering deployed; next: **Phase 04.5 — constitution alignment**, then Phase 05 completion.
+- **Companion docs:** `../architecture/repository-audit.md`, `../architecture/system-design.md`, `../architecture/security-model.md`, `phase-04-completion-report.md`, `phase-03.5-supabase-alignment-audit.md`
 
 Rules: implement **one phase at a time**; do not start a phase whose dependencies are unmet; every phase ends with the verification suite below green and a completion report.
 
@@ -11,15 +11,23 @@ Rules: implement **one phase at a time**; do not start a phase whose dependencie
 
 - **Engine:** Prisma Migrate against Supabase PostgreSQL.
 - **Connections:** migrations use `DIRECT_URL`; runtime uses pooled `DATABASE_URL` (`pgbouncer=true&connection_limit=1`).
-- **Baseline:** `prisma/migrations/20261013000000_init` is the initial migration
-  (**authored offline, not yet applied to any shared database**). Phase 04 added
-  `20261014000000_phase04_branding_contacts_and_catalogue`, and repaired two
-  defects that would have blocked the very first `migrate deploy` (a UTF-8 BOM on
-  `init`, and missing pgcrypto / snake_case column references / session-scoped
-  `set_config` in `20261013000001_rls_policies_and_constraints`). Apply with
-  `prisma migrate deploy` once a database exists; `prisma migrate dev` only for
-  local authoring. `prisma/scripts/phase04-migration-checks.sql` carries the
-  post-apply assertions.
+- **Baseline:** the chain is **applied and frozen** on the shared Supabase
+  project (2026-10-13/14) — six migrations in order:
+  `20261013000000_init`, `20261013000001_rls_policies_and_constraints`,
+  `20261014000000_phase04_branding_contacts_and_catalogue`,
+  `20261015000000_phase05_documents_and_numbering`,
+  `20261015000001_narrow_app_role_on_prisma_bookkeeping`,
+  `20261016000000_rls_hardening_auth_tables_and_function_privileges`.
+  Applied files are immutable — checksum-frozen; corrections ship as new
+  migrations (`prisma migrate status` verifies). The shared database already
+  carried another application's `public.schema_migrations`, so a fresh
+  `migrate deploy` needs the empty `_prisma_migrations` table pre-created
+  (P3005 — never baseline). `prisma migrate dev` is for local authoring only.
+  The offline verification procedure (throwaway cluster, `migrate diff` must be
+  empty, checks suite run exactly once) and post-apply assertions
+  (`prisma/scripts/phase04-migration-checks.sql`,
+  `phase05-migration-checks.sql`) are documented in the Phase 03.5 audit
+  report §5/§10.
 - **Never** use `prisma db push` against shared/staging/production databases.
 - **Change discipline:** expand → backfill → contract for breaking changes; one logical change per migration; review generated SQL before applying; no manual production edits.
 - **Data safety:** no destructive drops without a backup and a reversible plan; seed scripts must be idempotent and must not contain default credentials.
@@ -40,6 +48,11 @@ Rules: implement **one phase at a time**; do not start a phase whose dependencie
 
 **Definition of done for every phase:** `type-check`, `lint`, `test`, `build` all green + phase-specific security tests. Coverage thresholds to be set in Phase 07.
 
+**Integration-suite safety:** the DB-backed suites read `TEST_DATABASE_URL`
+and wipe tables between tests — they must point at a disposable database (the
+throwaway cluster above or a scratch DB), **never at the shared Supabase
+project**.
+
 ---
 
 ## 3. Minimum environment variables
@@ -56,9 +69,11 @@ Rules: implement **one phase at a time**; do not start a phase whose dependencie
 | `APP_BASE_DOMAIN` / `NEXT_PUBLIC_APP_BASE_DOMAIN` | optional  | —                        | required (routing) | tenant hostname base domain    |
 | `TRUST_PROXY`                                     | optional  | —                        | as needed          | trust `X-Forwarded-Host`       |
 | `SEED_*`, `ALLOW_PROD_SEED`                       | optional  | —                        | optional           | super-admin bootstrap          |
-| `SUPABASE_*`, `SMTP_*`, `EMAIL_FROM`              | optional  | —                        | optional           | server-only keys               |
+| `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | from 04.5a | dummy | required | browser-safe; auth + session refresh |
+| `SUPABASE_SECRET_KEY`                             | from 04.5a | dummy    | required           | **server-only** — never in a client bundle, log or error message |
+| `SMTP_*`, `EMAIL_FROM`                            | optional  | —                        | optional           | auth emails move to Supabase project config in 04.5a |
 
-Tests run with mocks; `tests/setup.ts` supplies placeholder values. Never place real secrets in `.env.example` or client bundles. `.env.example` was updated in Phase 00 to document `AUTH_TRUST_HOST`.
+Tests run with mocks; `tests/setup.ts` supplies placeholder values. Never place real secrets in `.env.example` or client bundles. The `AUTH_*` rows belong to the Auth.js stack and are retired when Phase 04.5a lands; `SUPABASE_SECRET_KEY` never appears with a real value in `.env.example`, client bundles, logs or error messages.
 
 ---
 
@@ -207,22 +222,87 @@ migration.`) plus applying the chain to a throwaway local cluster.
 - **Depends on:** Phase 03 (settings).
 - **Report:** `phase-04-completion-report.md` (evidence, limitations, next phase).
 
-### Phase 05 — Catalogue (narrowed by Phase 04)
+### Phase 03.5 — Supabase alignment & tenant-provisioning audit ✅ COMPLETE
 
-- The core catalogue (`Item`, `TaxCategory`, `TaxRate`, `ContactItem`) shipped
-  inside the expanded Phase 04 brief. Remaining candidate work: unit/price-list
-  modelling beyond a single agreed price, catalogue import, and bulk price edits
-  — none of it is required by the Phase 04 acceptance criteria.
-- **Acceptance:** products/prices tenant-isolated; tax derives from settings; role-gated writes. _(Already covered by Phase 04 tests.)_
-- **Depends on:** Phase 04.
+- **Delivered:** audit report `phase-03.5-supabase-alignment-audit.md`;
+  technology audit (no Neon/Drizzle/alternate-auth anywhere); provisioning and
+  RBAC/RLS reviews against code + tests, which found and fixed four real
+  database defects in a forward migration
+  (`20261016000000_rls_hardening_…`): auth-table policies were never activated,
+  empty-string GUCs broke the fail-closed default on pooled connections,
+  `SECURITY DEFINER` functions lacked a pinned `search_path`, and the RLS
+  helper functions were PUBLIC-executable. The integration security suite was
+  repaired and extended with a live two-tenant RLS behavioural test
+  (182/182 green across 7 files); migration chain applied to Supabase and
+  verified; fresh-cluster chain diff empty; both checks suites exit 0.
+- **Still open (audit §8):** Auth.js → Supabase Auth, migration-tooling
+  decision, cuid-vs-UUID for offline capture, filesystem logos, RLS activation
+  prerequisites, `currency ?? "USD"` sweep, distributed rate limiting, email
+  transport. The constitution (2026-10-14) resolves the first three via Phase
+  04.5; the rest stay scheduled in Phases 04.5/08.
+- **Depends on:** Phase 03.
 
-### Phase 06 — Documents & PDF generation
+### Phase 04.5 — Constitution alignment of existing code (NEXT)
 
-- Tasks: `Document` metadata + storage adapter (Supabase Storage, signed URLs); `lib/pdf` renderer from DTOs; issue/void/download guarded by `documents.*`.
-- **Acceptance:** uploads validated (type/size/extension); URLs signed/short-lived; no service-role key client-side; PDFs deterministic and tenant-branded.
-- **Depends on:** Phase 04 (the catalogue it needs shipped there; Phase 05 is no
-  longer a prerequisite). Document line items and the balance summary from Phase
-  04 both complete here.
+- **Trigger:** the AmisiBiz master engineering constitution (2026-10-14)
+  requires Supabase Auth/Storage, Turborepo, shadcn/ui, a shared TS domain
+  layer and the Capacitor/Tauri/SQLite offline architecture. The owner
+  instructed that existing code be aligned **before** further phases proceed.
+- **Sub-phases:**
+  - **04.5a — Supabase Auth swap:** replace the Auth.js credentials stack
+    (login/register/reset/session/revocation/middleware) with Supabase Auth
+    (`@supabase/ssr`); keep `User.sessionVersion` as the app-layer
+    authorization-freshness guard; retire obsolete auth tables in a forward
+    migration. Rules in force: local tenant status is never authoritative;
+    never claim an unverified flow works.
+  - **04.5b — Turborepo monorepo + shared domain package:** restructure to
+    `apps/web` + `packages/domain` (pure calculation/lifecycle/numbering
+    logic) so the Capacitor/Tauri clients can reuse it — lands before Phase 05
+    services are written.
+  - **04.5c — shadcn/ui adoption** for new UI (Phase 05 document screens
+    first); existing components migrate when touched.
+  - **04.5d — offline architecture design** (Capacitor/Tauri/SQLite, sync
+    queue, tombstones, client-generated UUIDs, idempotency, revocation and
+    maximum-authorization-freshness policy) — design only, before any offline
+    implementation.
+  - **04.5e — DPO Group / eTIMS interface design** (design only — no simulated
+    live payments, no undocumented DPO assumptions, eTIMS stays separate).
+- **Explicitly excluded:** branding and logo storage stay as shipped in Phase
+  04 (owner decision, 2026-10-14). Supabase Storage for generated documents is
+  planned inside Phase 05.
+- **Depends on:** Phase 03.5.
+
+### Phase 05 — Documents & PDF generation (IN PROGRESS — paused for 04.5)
+
+- **Delivered (schema layer, applied via `20261015000000`):** `Document`
+  (+ line/payment/status-event tables) with tenant-scoped unique numbers,
+  issuance snapshots + immutability triggers, totals-identity CHECKs,
+  status-per-type CHECKs, `idempotencyKey`, and
+  `allocate_document_number()` (per-tenant/type/period counters under
+  `FOR UPDATE`) plus `DocumentNumbering`/`DocumentNumberSequence`; the 23-check
+  migration suite and `prisma/scripts/phase05-numbering-concurrency.sql`;
+  read-only server actions (`getDocumentsAction`, `getDocumentAction`).
+- **Remaining:** calculation engine + numbering service
+  (`src/server/services/documents/**`); create/update/issue/void/payment/
+  conversion server actions + lifecycle state machine; tenant-branded PDF
+  renderer + download route; `/app/documents` UI + i18n; Phase 05 tests, gate
+  and completion report.
+- **Acceptance:** unique tenant-scoped numbers; immutable issued snapshots;
+  controlled correction/voiding/replacement; audited transitions; a commercial
+  PDF is never presented as a KRA/eTIMS-compliant tax invoice (eTIMS remains a
+  separate future integration).
+- **Note:** the old "Phase 05 — Catalogue" slot was absorbed by the expanded
+  Phase 04; leftover ideas (price lists, catalogue import, bulk price edits)
+  are optional extras without a phase number. Implementation must not resume
+  until Phase 04.5 has aligned the existing code.
+- **Depends on:** Phase 04 + Phase 04.5.
+
+### Phase 06 — ⤵ merged into Phase 05
+
+- The former Phase 06 (document storage adapter — Supabase Storage signed
+  URLs, `lib/pdf` renderer, issue/void/download flows) was folded into Phase 05
+  when the numbering was reconciled; Supabase Storage adoption is decided
+  there. Kept as a stub for traceability only.
 
 ### Phase 07 — Audit viewer & observability
 
@@ -258,18 +338,29 @@ migration.`) plus applying the chain to a throwaway local cluster.
   never the platform console or security indicators.
 - Contact and catalogue writes must never mutate `Document` rows; documents keep
   their own header snapshot. Contacts are archived, not deleted.
+- **Supabase Auth supersedes Auth.js** (constitution, 2026-10-14): after Phase
+  04.5a lands, do not reintroduce Auth.js, its adapter tables or new
+  `AUTH_*`-driven session logic; read the active auth model from the repo, not
+  from older docs.
+- Keep `User.sessionVersion` semantics as the app-layer authorization-freshness
+  guard after the auth swap (checked server-side on every request).
+- The RLS model stays **server-set, fail-closed GUCs** (`set_tenant_context`
+  with `NULLIF`-guarded reads) — clients never set tenant/user context, and a
+  missing context must deny, not error.
 
 ---
 
 ## 6. Immediate next action
 
-Phase 04 is complete and committed. The next phase that can safely begin is
-**Phase 06 — Documents & PDF generation** (its prerequisite catalogue is already
-in place from Phase 04); Phase 05 holds only optional catalogue extras.
+Phase 03.5 is complete and committed. Phase 05's schema/numbering layer is
+already deployed, but **implementation must not continue until the constitution
+alignment of the existing code (Phase 04.5) is executed** — starting with the
+Supabase Auth swap (04.5a), then the Turborepo/domain restructure (04.5b)
+before any Phase 05 service code is written. Branding (Phase 04) is explicitly
+out of scope for the alignment (owner decision, 2026-10-14).
 
-Two items are deliberately carried into Phase 08 rather than left implicit:
-activating RLS (per-request `set_config`, connecting as `amisibiz_app`) and
-applying the migration chain to a real database. Before production registration
-is enabled, wire an email transport and enable `REQUIRE_EMAIL_VERIFICATION`;
-before production launch, also implement distributed rate limiting (Section 4,
-Phase 08).
+Carried into Phase 08 rather than left implicit: activating RLS (per-request
+`set_config`, connecting as `amisibiz_app`), distributed rate limiting, email
+transport verification, and production deployment config. The RLS behavioural
+test (`tests/integration-security.test.ts`) runs only against a disposable
+database via `TEST_DATABASE_URL` — never the shared Supabase project.

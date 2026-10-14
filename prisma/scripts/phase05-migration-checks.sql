@@ -83,34 +83,40 @@ INSERT INTO "Document" ("id","tenantId","type","status","number","contactId")
 ROLLBACK;
 
 BEGIN;
+-- Complete in every other respect: the only thing missing is the number, so the
+-- failure reported is the draft/number identity and not an unrelated CHECK.
 SELECT '2b. issued document without a number rejected' AS check;
-INSERT INTO "Document" ("id","tenantId","type","status","contactId","issuedAt","issuedById","snapshot","snapshotAt")
-  VALUES ('chk-2b','tenantaaa0000000000000001','QUOTATION','ISSUED','c-a1',now(),'actor-1','{}'::jsonb,now());
+INSERT INTO "Document" ("id","tenantId","type","status","contactId","expiryDate",
+                        "issuedAt","issuedById","snapshot","snapshotAt")
+  VALUES ('chk-2b','tenantaaa0000000000000001','QUOTATION','ISSUED','c-a1',
+          DATE '2026-12-31',now(),'actor-1','{}'::jsonb,now());
 ROLLBACK;
 
 BEGIN;
-SELECT '2c. several unnumbered drafts coexist (NULLs do not collide)' AS check,
-       count(*) AS drafts
-FROM "Document" WHERE "tenantId" = 'tenantaaa0000000000000001' AND "status" = 'DRAFT';
 INSERT INTO "Document" ("id","tenantId","type","status","contactId")
   VALUES ('chk-2c1','tenantaaa0000000000000001','QUOTATION','DRAFT','c-a1'),
          ('chk-2c2','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1'),
          ('chk-2c3','tenantaaa0000000000000001','DELIVERY_NOTE','DRAFT','c-a1');
-SELECT '2c. three drafts created' AS check, count(*) AS drafts
-FROM "Document" WHERE "tenantId" = 'tenantaaa0000000000000001' AND "number" IS NULL;
+SELECT '2c. three unnumbered drafts coexist (NULLs do not collide)' AS check,
+       count(*) AS drafts, count("number") AS numbered
+FROM "Document" WHERE "id" LIKE 'chk-2c%';
 ROLLBACK;
 
 -- ── 3. each document type owns its lifecycle ─────────────────────────────────
 BEGIN;
-SELECT '3. quotation cannot be PAID / invoice cannot be ACCEPTED' AS check;
-INSERT INTO "Document" ("id","tenantId","type","status","contactId")
-  VALUES ('chk-3a','tenantaaa0000000000000001','QUOTATION','PAID','c-a1');
+SELECT '3a. quotation cannot be PAID' AS check;
+INSERT INTO "Document" ("id","tenantId","type","status","number","contactId","expiryDate",
+                        "issuedAt","issuedById","snapshot","snapshotAt")
+  VALUES ('chk-3a','tenantaaa0000000000000001','QUOTATION','PAID','QUO-2026-0031','c-a1',
+          DATE '2026-12-31',now(),'actor-1','{}'::jsonb,now());
 ROLLBACK;
 
 BEGIN;
-SELECT '3. (second half) invoice cannot be ACCEPTED' AS check;
-INSERT INTO "Document" ("id","tenantId","type","status","contactId")
-  VALUES ('chk-3b','tenantaaa0000000000000001','INVOICE','ACCEPTED','c-a1');
+SELECT '3b. invoice cannot be ACCEPTED' AS check;
+INSERT INTO "Document" ("id","tenantId","type","status","number","contactId","dueDate",
+                        "issuedAt","issuedById","snapshot","snapshotAt")
+  VALUES ('chk-3b','tenantaaa0000000000000001','INVOICE','ACCEPTED','INV-2026-0031','c-a1',
+          DATE '2026-12-31',now(),'actor-1','{}'::jsonb,now());
 ROLLBACK;
 
 -- ── 4. the stored breakdown is an identity, not a hint ───────────────────────
@@ -123,24 +129,28 @@ INSERT INTO "Document" ("id","tenantId","type","status","contactId",
 ROLLBACK;
 
 BEGIN;
-SELECT '4b. consistent breakdown accepted' AS check,
-       "subtotal"::text || ' - ' || "totalDiscount"::text || ' = ' ||
-       "taxableBase"::text || ' + ' || "taxTotal"::text || ' = ' || "total"::text AS stored
-FROM (
+WITH d AS (
   INSERT INTO "Document" ("id","tenantId","type","status","contactId",
                           "subtotal","totalDiscount","taxableBase","taxTotal","total")
   VALUES ('chk-4b','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1',
           100.00, 10.00, 90.00, 14.40, 104.40)
   RETURNING "subtotal","totalDiscount","taxableBase","taxTotal","total"
-) s;
+)
+SELECT '4b. consistent breakdown accepted' AS check,
+       "subtotal"::text || ' - ' || "totalDiscount"::text || ' = ' ||
+       "taxableBase"::text || ' + ' || "taxTotal"::text || ' = ' || "total"::text AS stored
+FROM d;
 ROLLBACK;
 
 BEGIN;
+-- The identities hold and the total is positive, so the legacy `total >= 0`
+-- CHECK passes and the failure that surfaces is the one under test: a discount
+-- can never be larger than the subtotal it comes off.
 SELECT '4c. discount larger than the subtotal rejected (base cannot go negative)' AS check;
 INSERT INTO "Document" ("id","tenantId","type","status","contactId",
                         "subtotal","totalDiscount","taxableBase","taxTotal","total")
   VALUES ('chk-4c','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1',
-          100.00, 150.00, -50.00, 0.00, -50.00);
+          100.00, 150.00, -50.00, 60.00, 10.00);
 ROLLBACK;
 
 -- ── 5. a line has one discount mechanism, not two ────────────────────────────
@@ -176,20 +186,21 @@ ROLLBACK;
 
 -- ── 6. money and quantity are exact decimals ────────────────────────────────
 BEGIN;
+WITH d AS (
+  INSERT INTO "Document" ("id","tenantId","type","status","contactId")
+  VALUES ('chk-6','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1') RETURNING "id"
+), l AS (
+  INSERT INTO "DocumentLine" ("id","tenantId","documentId","position","description",
+                              "quantity","unitPrice","lineTotal","lineNet")
+  SELECT 'l-6','tenantaaa0000000000000001', d."id", 1, 'Precise line',
+         3, 33.3333, 99.9999, 99.9999
+  FROM d
+  RETURNING "quantity","unitPrice","lineTotal"
+)
 SELECT '6. three decimals of a quantity survive the round trip' AS check,
        "quantity"::text AS quantity, "unitPrice"::text AS unit_price,
        "lineTotal"::text AS line_total
-FROM (
-  INSERT INTO "Document" ("id","tenantId","type","status","contactId")
-  VALUES ('chk-6','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1') RETURNING "id"
-) d
-JOIN LATERAL (
-  INSERT INTO "DocumentLine" ("id","tenantId","documentId","position","description",
-                              "quantity","unitPrice","lineTotal","lineNet")
-  VALUES ('l-6','tenantaaa0000000000000001', d."id", 1, 'Precise line',
-          3, 33.3333, 99.9999, 99.9999)
-  RETURNING "quantity","unitPrice","lineTotal"
-) s ON true;
+FROM l;
 ROLLBACK;
 
 -- ── 7. delivered quantity is a running total inside the line ─────────────────
@@ -204,19 +215,20 @@ INSERT INTO "DocumentLine" ("id","tenantId","documentId","position","description
 ROLLBACK;
 
 BEGIN;
-SELECT '7b. partial delivery accepted and sums to the ordered quantity' AS check,
-       "quantity"::text AS ordered, "deliveredQuantity"::text AS delivered
-FROM (
+WITH d AS (
   INSERT INTO "Document" ("id","tenantId","type","status","contactId")
   VALUES ('chk-7b','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1') RETURNING "id"
-) d
-JOIN LATERAL (
+), l AS (
   INSERT INTO "DocumentLine" ("id","tenantId","documentId","position","description",
                               "quantity","unitPrice","lineTotal","lineNet","deliveredQuantity")
-  VALUES ('l-7b','tenantaaa0000000000000001', d."id", 1, 'Ten units',
-          10, 5.00, 50.00, 50.00, 4)
+  SELECT 'l-7b','tenantaaa0000000000000001', d."id", 1, 'Ten units',
+         10, 5.00, 50.00, 50.00, 4
+  FROM d
   RETURNING "quantity","deliveredQuantity"
-) s ON true;
+)
+SELECT '7b. partial delivery accepted and stays inside the line' AS check,
+       "quantity"::text AS ordered, "deliveredQuantity"::text AS delivered
+FROM l;
 ROLLBACK;
 
 -- ── 8. no child row can be pointed at another tenant ─────────────────────────
@@ -284,9 +296,6 @@ INSERT INTO "Document" ("id","tenantId","type","status","number","contactId","du
 ROLLBACK;
 
 BEGIN;
-SELECT '10b. two delivery notes from one invoice are allowed (partial delivery)' AS check,
-       count(*) AS delivery_notes
-FROM "Document" WHERE "sourceDocumentId" = 'i-10-src';
 INSERT INTO "Document" ("id","tenantId","type","status","number","contactId","dueDate",
                         "issuedAt","issuedById","snapshot","snapshotAt")
   VALUES ('i-10-src','tenantaaa0000000000000001','INVOICE','ISSUED','INV-2026-0710','c-a1',
@@ -297,14 +306,17 @@ INSERT INTO "Document" ("id","tenantId","type","status","number","contactId","de
           now(), now(),'actor-1','{}'::jsonb, now(),'i-10-src'),
          ('dn-10b','tenantaaa0000000000000001','DELIVERY_NOTE','ISSUED','DN-2026-0711','c-a1',
           now(), now(),'actor-1','{}'::jsonb, now(),'i-10-src');
-SELECT '10b. two delivery notes from one invoice' AS check, count(*) AS delivery_notes
+SELECT '10b. two delivery notes from one invoice are allowed (partial delivery)' AS check,
+       count(*) AS delivery_notes
 FROM "Document" WHERE "sourceDocumentId" = 'i-10-src';
 ROLLBACK;
 
 BEGIN;
-SELECT '10c. a quotation cannot be derived from another document' AS check;
-INSERT INTO "Document" ("id","tenantId","type","status","contactId","sourceDocumentId")
-  VALUES ('chk-10c','tenantaaa0000000000000001','QUOTATION','DRAFT','c-a1','chk-10c');
+SELECT '10c. only a sales document can be derived from another' AS check;
+INSERT INTO "Document" ("id","tenantId","type","status","contactId")
+  VALUES ('chk-10c-src','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1'),
+         ('chk-10c-new','tenantaaa0000000000000001','QUOTATION','DRAFT','c-a1');
+UPDATE "Document" SET "sourceDocumentId" = 'chk-10c-src' WHERE "id" = 'chk-10c-new';
 ROLLBACK;
 
 -- ── 11. idempotency keys are unique per tenant, so a retry returns the same row ─
@@ -316,16 +328,29 @@ INSERT INTO "Document" ("id","tenantId","type","status","contactId","idempotency
 ROLLBACK;
 
 -- ── 12. an issued document is immutable, and cannot be deleted ───────────────
+-- Issued through the lifecycle, exactly as the service layer will do it: the
+-- draft exists first, its lines are written while it is editable, and then a
+-- single UPDATE moves it to ISSUED with its number, snapshot and actor.
+-- (Adding a line after issuance is itself rejected — check 13a — so the fixture
+-- had to respect the rule it is about to test.)
 BEGIN;
-INSERT INTO "Document" ("id","tenantId","type","status","number","contactId","dueDate",
-                        "issuedAt","issuedById","snapshot","snapshotAt",
-                        "subtotal","totalDiscount","taxableBase","taxTotal","total","taxBreakdown")
-  VALUES ('imm-1','tenantaaa0000000000000001','INVOICE','ISSUED','INV-2026-0801','c-a1',
-          now()+interval '30 days', now(),'actor-1','{"number":"INV-2026-0801"}'::jsonb, now(),
-          100.00, 0.00, 100.00, 16.00, 116.00, '[{"rate":"0.1600","amount":"16.0000"}]'::jsonb);
+INSERT INTO "Document" ("id","tenantId","type","status","contactId",
+                        "subtotal","totalDiscount","taxableBase","taxTotal","total")
+  VALUES ('imm-1','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1',
+          100.00, 0.00, 100.00, 16.00, 116.00);
 INSERT INTO "DocumentLine" ("id","tenantId","documentId","position","description",
                             "quantity","unitPrice","lineTotal","lineNet","lineTax","taxName","taxRate")
   VALUES ('imm-l1','tenantaaa0000000000000001','imm-1',1,'Widget',2,50.00,100.00,100.00,16.00,'VAT 16%',0.16);
+UPDATE "Document"
+   SET "status" = 'ISSUED', "number" = 'INV-2026-0801',
+       "dueDate" = now() + interval '30 days',
+       "issuedAt" = now(), "issuedById" = 'actor-1',
+       "snapshot" = '{"number":"INV-2026-0801"}'::jsonb, "snapshotAt" = now(),
+       "taxBreakdown" = '[{"rate":"0.1600","amount":"16.0000"}]'::jsonb
+ WHERE "id" = 'imm-1';
+SELECT '12. issued through the lifecycle: draft, line, then number and snapshot' AS check,
+       "status"::text AS status, "number", "issuedById"
+FROM "Document" WHERE "id" = 'imm-1';
 COMMIT;
 
 BEGIN;
@@ -465,13 +490,13 @@ ROLLBACK;
 BEGIN;
 SELECT '15a. first allocation for a fresh tenant uses the default series' AS check,
        allocate_document_number('tenantnum0010000000000001', 'INVOICE',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS number,
+                                DATE '2026-04-05') AS number,
        allocate_document_number('tenantnum0010000000000001', 'INVOICE',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS next_number,
+                                DATE '2026-04-05') AS next_number,
        allocate_document_number('tenantnum0010000000000001', 'QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS other_series,
+                                DATE '2026-04-05') AS other_series,
        allocate_document_number('tenantnum0010000000000001', 'DELIVERY_NOTE',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS third_series;
+                                DATE '2026-04-05') AS third_series;
 COMMIT;
 
 BEGIN;
@@ -486,123 +511,143 @@ COMMIT;
 BEGIN;
 SELECT '15c. peek shows the next number without taking it' AS check,
        peek_document_number('tenantnum0010000000000001','INVOICE',
-                            TIMESTAMPTZ '2026-04-05 10:00:00+00') AS preview;
+                            DATE '2026-04-05') AS preview;
 SELECT '15c. counter unchanged by the peek' AS check, "nextValue"
 FROM "DocumentNumberSequence"
 WHERE "tenantId" = 'tenantnum0010000000000001' AND "type" = 'INVOICE';
 COMMIT;
 
 BEGIN;
-SELECT '15d. a calendar-year series rolls over at the year boundary' AS check,
+-- The period is derived from a DATE — the document's own issue date — never from
+-- a timestamp and never from the clock. Reading a `timestamptz` through
+-- `to_char(...,'YYYY')` applies the session TimeZone, which on this scratch
+-- cluster (+03:00) silently moved an invoice issued at 23:59Z on 31 December
+-- into the following year. These two allocations are the boundary that caught it.
+SELECT '15d. a calendar-year series rolls over on the document issue date, not the session clock' AS check,
        allocate_document_number('tenantnum0010000000000001','INVOICE',
-                                TIMESTAMPTZ '2026-12-31 23:59:00+00') AS december,
+                                DATE '2026-12-31') AS december,
        allocate_document_number('tenantnum0010000000000001','INVOICE',
-                                TIMESTAMPTZ '2027-01-01 00:01:00+00') AS january;
+                                DATE '2027-01-01') AS january;
 COMMIT;
 
 BEGIN;
 SELECT '15e. tenant-configured prefix, padding and no period are honoured' AS check,
        allocate_document_number('tenantnum0020000000000001','INVOICE',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS first_custom,
+                                DATE '2026-04-05') AS first_custom,
        allocate_document_number('tenantnum0020000000000001','INVOICE',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS second_custom;
+                                DATE '2026-04-05') AS second_custom;
 COMMIT;
 
 BEGIN;
-SELECT '15f. financial-year style writes 2026/27 and stays in it before January' AS check,
-       document_number_period('FINANCIAL_YEAR', 1, TIMESTAMPTZ '2026-01-01+00') AS jan,
-       document_number_period('CALENDAR_YEAR', 1, TIMESTAMPTZ '2026-06-01+00') AS mid,
-       document_number_period('NONE', 1, TIMESTAMPTZ '2026-06-01+00') AS no_period,
-       document_number_period('FINANCIAL_YEAR', 4, TIMESTAMPTZ '2026-03-01+00') AS fy_march,
-       document_number_period('FINANCIAL_YEAR', 4, TIMESTAMPTZ '2026-04-01+00') AS fy_april;
+-- FINANCIAL_YEAR labels the year the books START in: with an April year start,
+-- March 2026 still belongs to 2025/26. CALENDAR_YEAR is the plain year, and NONE
+-- produces an empty period so the number composes without one.
+SELECT '15f. period styles: financial year names the starting year, none omits the period' AS check,
+       document_number_period('FINANCIAL_YEAR', 1, DATE '2026-01-01') AS fy_jan,
+       document_number_period('CALENDAR_YEAR', 1, DATE '2026-06-01') AS calendar_mid,
+       document_number_period('NONE', 1, DATE '2026-06-01') AS no_period,
+       document_number_period('FINANCIAL_YEAR', 4, DATE '2026-03-01') AS fy_march,
+       document_number_period('FINANCIAL_YEAR', 4, DATE '2026-04-01') AS fy_april;
 COMMIT;
 
 -- ── 16. an exhausted series fails instead of widening the number ─────────────
+-- The ninth value still fits one digit; the tenth does not, so the function
+-- raises instead of quietly emitting a two-character number that could collide
+-- with another shape of the same series. The failing statement runs in its own
+-- transaction, which also shows that an issuance that dies after allocating
+-- burns nothing (compare check 17).
 BEGIN;
-SELECT '16. series with padding 1 stops at 9 rather than emitting 10' AS check;
+SELECT '16a. a one-digit series hands out 1 through 9' AS check,
+       string_agg(allocate_document_number('tenantnum0030000000000001','QUOTATION',
+                                           DATE '2026-04-05'), ' ' ORDER BY s) AS numbers
+FROM generate_series(1, 9) AS s;
+COMMIT;
+
+BEGIN;
+SELECT '16b. the tenth allocation raises instead of widening the number' AS check;
 SELECT allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n1,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n2,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n3,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n4,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n5,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n6,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n7,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n8,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n9,
-       allocate_document_number('tenantnum0030000000000001','QUOTATION',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS n10_expected_error;
+                                DATE '2026-04-05') AS n10_expected_error;
+ROLLBACK;
+
+BEGIN;
+SELECT '16c. the failed allocation consumed nothing: the counter is still 10' AS check,
+       "nextValue"
+FROM "DocumentNumberSequence"
+WHERE "tenantId" = 'tenantnum0030000000000001' AND "type" = 'QUOTATION';
 COMMIT;
 
 -- ── 17. an allocation that is rolled back is not burned ──────────────────────
 BEGIN;
 SELECT '17a. number taken inside a transaction that is rolled back' AS check,
        allocate_document_number('tenantnum0050000000000001','INVOICE',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS taken;
+                                DATE '2026-04-05') AS taken;
 ROLLBACK;
 BEGIN;
 SELECT '17b. the same value is handed out again: it was never issued' AS check,
        allocate_document_number('tenantnum0050000000000001','INVOICE',
-                                TIMESTAMPTZ '2026-04-05 10:00:00+00') AS reused;
+                                DATE '2026-04-05') AS reused;
 COMMIT;
 
 -- ── 18. deleting or abandoning a draft never consumes a number ───────────────
 BEGIN;
-SELECT '18. drafts allocated no number' AS check,
-       count(*) AS drafts, count("number") AS numbered
-FROM "Document" WHERE "tenantId" = 'tenantnum0060000000000001';
+-- A drafted document may still be waiting for its customer (creation workflow
+-- step 2), so these drafts carry no contact.
 INSERT INTO "Document" ("id","tenantId","type","status")
   VALUES ('dr-1','tenantnum0060000000000001','INVOICE','DRAFT'),
          ('dr-2','tenantnum0060000000000001','INVOICE','DRAFT');
-SELECT '18. counter untouched while two drafts exist' AS check,
-       coalesce((SELECT count(*) FROM "DocumentNumberSequence"
-                 WHERE "tenantId" = 'tenantnum0060000000000001'), 0) AS sequences;
+SELECT '18a. two drafts exist and neither holds a number' AS check,
+       count(*) AS drafts, count("number") AS numbered
+FROM "Document" WHERE "tenantId" = 'tenantnum0060000000000001';
+SELECT '18b. no counter row was created while they were drafted' AS check,
+       (SELECT count(*) FROM "DocumentNumberSequence"
+         WHERE "tenantId" = 'tenantnum0060000000000001') AS sequences;
 DELETE FROM "Document" WHERE "id" IN ('dr-1','dr-2');
-SELECT '18. drafts deleted; the series still starts at 1' AS check,
+SELECT '18c. drafts deleted; the series still starts at 1' AS check,
        peek_document_number('tenantnum0060000000000001','INVOICE',
-                            TIMESTAMPTZ '2026-04-05 10:00:00+00') AS next_number;
+                            DATE '2026-04-05') AS next_number;
 COMMIT;
 
 -- ── 19. concurrency: two sessions allocate from one series at the same time ──
--- Run outside a transaction: each session commits its own allocations, and the
--- expectation is 20 distinct numbers with no gap and no collision. The two
--- sessions are launched by the shell wrapper (see the phase 05 completion
--- report); this query only reports what the database ended up holding.
-BEGIN;
-SELECT '19. distinct numbers allocated across the parallel sessions' AS check,
-       count(*) AS allocated,
-       count(DISTINCT "number") AS distinct_numbers,
-       min("number") AS first_number,
-       max("number") AS last_number
-FROM "Document" WHERE "tenantId" = 'tenantnum0040000000000001';
-SELECT '19. the counter advanced exactly once per allocation' AS check,
-       sum("nextValue" - 1) AS consumed
-FROM "DocumentNumberSequence" WHERE "tenantId" = 'tenantnum0040000000000001';
-COMMIT;
+-- This check cannot run inside a single-connection script, so it lives in
+-- `phase05-numbering-concurrency.sql`, which is launched as two `psql` processes
+-- at once. Each session commits a DO block that allocates ten numbers and
+-- inserts an ISSUED invoice carrying each one, into tenant
+-- `tenantnum0040000000000001`. If the counter row were not locked, both sessions
+-- would read the same `nextValue` and the unique index would reject the second
+-- invoice. The report below (run after both sessions have committed) proves that
+-- twenty distinct, gap-free numbers exist and that the counter advanced exactly
+-- twenty times:
+--
+--   SELECT count(DISTINCT d."number") AS numbers, count(*) AS documents,
+--          min(d."number") AS first_number, max(d."number") AS last_number,
+--          max(s."nextValue") - 1 AS highest_allocated
+--     FROM "Document" d
+--     JOIN "DocumentNumberSequence" s
+--       ON s."tenantId" = d."tenantId" AND s."type" = d."type"
+--    WHERE d."tenantId" = 'tenantnum0040000000000001';
 
--- ── 20. the numbering legacy is gone and existing tenants were backfilled ────
+-- ── 20. the numbering legacy is gone ─────────────────────────────────────────
+-- The backfill itself is proved on a separate database (see the completion
+-- report): migrations up to Phase 04 are applied, a tenant with
+-- `documentPrefix`/`quotationPrefix` set is inserted, then the Phase 05
+-- migration runs and its series are read back.
 SELECT '20a. TenantSettings no longer carries numbering columns' AS check,
        coalesce(string_agg(column_name, ', ' ORDER BY column_name), 'none left') AS columns
 FROM information_schema.columns
 WHERE table_name = 'TenantSettings'
   AND column_name IN ('documentPrefix','quotationPrefix','documentNextNumber');
 
-SELECT '20b. every tenant has three series, with the legacy prefixes carried over' AS check,
-       t."slug",
-       coalesce(string_agg(n."type"::text || '=' || n."prefix", ' ' ORDER BY n."type"), 'none') AS series
-FROM "Tenant" t
-LEFT JOIN "DocumentNumbering" n ON n."tenantId" = t."id"
-GROUP BY t."slug" ORDER BY t."slug";
+BEGIN;
+SELECT '20b. an app-facing write path can still read the series for its tenant' AS check,
+       "type"::text AS type, "prefix", "padding", "periodStyle"::text AS period_style
+FROM "DocumentNumbering" WHERE "tenantId" = 'tenantnum0010000000000001' ORDER BY "type";
+COMMIT;
 
 -- ── 21. row level security mirrors the application isolation ─────────────────
+-- Defence in depth, exercised on its own terms: nothing in the request path sets
+-- `app.current_tenant_id` yet (Phase 08 wires `set_config()` into the Prisma
+-- driver), so these statements prove the policies behave correctly for the day
+-- it does. Every count here is the app role's own view, never the owner's.
 BEGIN;
 INSERT INTO "Document" ("id","tenantId","type","status","contactId") VALUES
   ('rls-d1','tenantaaa0000000000000001','INVOICE','DRAFT','c-a1'),
@@ -611,22 +656,32 @@ INSERT INTO "DocumentLine" ("id","tenantId","documentId","position","description
                             "quantity","unitPrice","lineTotal","lineNet") VALUES
   ('rls-l1','tenantaaa0000000000000001','rls-d1',1,'A line',1,10.00,10.00,10.00),
   ('rls-l2','tenantbbb0000000000000001','rls-d2',1,'B line',1,10.00,10.00,10.00);
+-- A counter for tenant A, created through the sanctioned function.
+SELECT '21. tenant A has one allocated number and one counter row' AS check,
+       allocate_document_number('tenantaaa0000000000000001','INVOICE',
+                                DATE '2026-04-05') AS number;
+SELECT '21. owner sees every row in the database, which is the baseline' AS check,
+       (SELECT count(*) FROM "DocumentLine") AS lines,
+       (SELECT count(*) FROM "DocumentNumberSequence") AS counters;
 SET ROLE amisibiz_app;
 SET app.current_tenant_id = 'tenantaaa0000000000000001';
-SELECT '21a. app role sees only its tenant''s lines' AS check, count(*) AS visible
+SELECT '21a. app role sees only tenant A''s lines' AS check, count(*) AS visible_lines
 FROM "DocumentLine";
-SELECT '21b. and only its tenant''s counters' AS check, count(*) AS visible
+SELECT '21b. and only tenant A''s counter' AS check,
+       count(*) AS visible_counters, string_agg("type"::text, ',') AS types
 FROM "DocumentNumberSequence";
 RESET app.current_tenant_id;
-SELECT '21c. with no tenant context the app role sees nothing' AS check, count(*) AS visible
-FROM "DocumentLine";
+SELECT '21c. with no tenant context the app role sees nothing' AS check,
+       (SELECT count(*) FROM "DocumentLine") AS lines,
+       (SELECT count(*) FROM "DocumentNumberSequence") AS counters;
 SET app.current_tenant_id = 'tenantaaa0000000000000001';
-SAVEPOINT before_forged_line;
-INSERT INTO "DocumentLine" ("id","tenantId","documentId","position","description",
-                            "quantity","unitPrice","lineTotal","lineNet")
-  VALUES ('rls-l3','tenantbbb0000000000000001','rls-d2',1,'Forged',1,1.00,1.00,1.00);
-ROLLBACK TO SAVEPOINT before_forged_line;
-SELECT '21d. forged line for another tenant rejected (see RLS error above)' AS check,
+SAVEPOINT before_forged_series;
+-- `DocumentNumbering` carries a policy but no cross-tenant trigger, so this is
+-- the purest test of the WITH CHECK clause: a series written for another tenant.
+INSERT INTO "DocumentNumbering" ("id","tenantId","type","prefix","padding","separator","periodStyle")
+  VALUES ('rls-num-forge','tenantbbb0000000000000001','INVOICE','FORGE',4,'-','CALENDAR_YEAR');
+ROLLBACK TO SAVEPOINT before_forged_series;
+SELECT '21d. forged series for another tenant rejected (see RLS error above)' AS check,
        'rejected' AS result;
 RESET ROLE;
 ROLLBACK;
@@ -643,10 +698,37 @@ SELECT '22. direct DELETE on the counter table is not granted (see error above)'
 RESET ROLE;
 ROLLBACK;
 
--- ── 23. a number generated by the database satisfies the printed-format CHECK ─
+-- ── 23. numbers are safe identifiers, stored and freshly generated ───────────
 BEGIN;
-SELECT '23. generated numbers all match the stored format CHECK' AS check,
+SELECT '23a. every number stored in the database satisfies the printed-format CHECK' AS check,
        count(*) AS numbers,
        count(*) FILTER (WHERE "number" !~ '^[A-Za-z0-9][A-Za-z0-9/_.-]{0,63}$') AS unsafe
 FROM "Document" WHERE "number" IS NOT NULL;
-COMMIT;
+-- The same pattern the CHECK enforces, applied to what the function emits for
+-- each configured series shape: default, tenant-chosen prefix with no period,
+-- and a rolled-back allocation that proves nothing was burned.
+SELECT '23b. numbers generated by the function match it too' AS check,
+       n AS number,
+       (n ~ '^[A-Za-z0-9][A-Za-z0-9/_.-]{0,63}$') AS safe
+FROM (
+    SELECT allocate_document_number('tenantnum0060000000000001','DELIVERY_NOTE',
+                                    DATE '2026-04-05') AS n
+    UNION ALL
+    SELECT allocate_document_number('tenantnum0020000000000001','INVOICE',
+                                    DATE '2026-04-05')
+    UNION ALL
+    SELECT peek_document_number('tenantnum0010000000000001','QUOTATION',
+                                DATE '2027-01-01')
+) generated;
+ROLLBACK;
+
+-- The rolled-back allocations above must not have advanced the series they
+-- touched, and the earlier committed allocation for tenant A must have.
+SELECT '23c. rolled-back allocations burned nothing' AS check,
+       coalesce((SELECT "nextValue"::text FROM "DocumentNumberSequence"
+                  WHERE "tenantId" = 'tenantnum0060000000000001' AND "type" = 'DELIVERY_NOTE'
+                    AND "period" = '2026'), 'series row does not exist either')
+         AS tenant_num_006_delivery_notes,
+       (SELECT "nextValue" FROM "DocumentNumberSequence"
+         WHERE "tenantId" = 'tenantnum0020000000000001' AND "type" = 'INVOICE'
+           AND "period" = '') AS tenant_num_002_invoices_still_at;

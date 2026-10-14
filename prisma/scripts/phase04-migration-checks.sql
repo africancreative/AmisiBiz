@@ -134,10 +134,15 @@ SELECT '11c. controlled logo URL accepted' AS check, "logoUrl" FROM "TenantBrand
 ROLLBACK;
 
 -- ── 12. issued documents survive contact archiving (no cascade destruction) ─
+-- Phase 05's issuance constraints require the snapshot fields, a due date on
+-- an issued invoice, and an issuing actor, so the fixture carries them.
 BEGIN;
+INSERT INTO "User" ("id","email","name","platformRole","status")
+  VALUES ('actor-1','actor@example.invalid','Issuer One','USER','ACTIVE')
+  ON CONFLICT ("id") DO NOTHING;
 INSERT INTO "Contact" ("id","tenantId","type","firstName") VALUES ('c-6','tenantaaa0000000000000001','INDIVIDUAL','Ann');
-INSERT INTO "Document" ("id","tenantId","contactId","type","number","status","total","currency")
-  VALUES ('d-1','tenantaaa0000000000000001','c-6','INVOICE','INV-0001','ISSUED',1000,'KES');
+INSERT INTO "Document" ("id","tenantId","contactId","type","number","status","subtotal","totalDiscount","taxableBase","taxTotal","total","currency","snapshot","snapshotAt","issuedAt","issuedById","dueDate")
+  VALUES ('d-1','tenantaaa0000000000000001','c-6','INVOICE','INV-0001','ISSUED',1000,0,1000,0,1000,'KES','{}',now(),now(),'actor-1', now() + interval '30 days');
 UPDATE "Contact" SET "status"='ARCHIVED',"archivedAt"=now() WHERE "id"='c-6';
 SELECT '12. document keeps its contact after archive' AS check, count(*) AS documents FROM "Document" WHERE "contactId"='c-6';
 ROLLBACK;

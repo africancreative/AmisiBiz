@@ -220,28 +220,149 @@ describeIfDb("Database-backed security integration tests", () => {
   describe("RLS policies enforce tenant isolation", () => {
     it("RLS helper functions exist", async () => {
       if (!prisma) return;
-      // These functions should be created by the migration
-      const result = await prisma.$queryRaw`
-        SELECT proname FROM pg_proc 
+      // The five helpers the policies and the application context depend on.
+      const result = await prisma.$queryRaw<{ proname: string }[]>`
+        SELECT proname FROM pg_proc
         WHERE proname IN ('current_tenant_id', 'current_user_id', 'is_platform_admin', 'set_tenant_context', 'clear_tenant_context')
       `;
-      expect(result).toBeDefined();
+      expect(result.map((row) => row.proname).sort()).toEqual([
+        "clear_tenant_context",
+        "current_tenant_id",
+        "current_user_id",
+        "is_platform_admin",
+        "set_tenant_context",
+      ]);
     });
 
-    it("RLS is enabled on protected tables", async () => {
+    it("RLS is enabled on every application table", async () => {
       if (!prisma) return;
-      const result = await prisma.$queryRaw<
-        { tablename: string; rowsecurity: boolean }[]
-      >`
-        SELECT tablename, rowsecurity FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-        AND tablename IN ('Tenant', 'TenantSettings', 'TenantBranding', 'TenantDomain', 'TenantMember', 'Invitation', 'AuditLog', 'User')
+      // `_prisma_migrations` is Prisma's bookkeeping table and the app role
+      // has no privileges on it (REVOKEd), so it is deliberately exempt.
+      // Any other table appearing here is one that RLS does not protect.
+      const result = await prisma.$queryRaw<{ tablename: string }[]>`
+        SELECT tablename FROM pg_tables
+        WHERE schemaname = 'public' AND NOT rowsecurity
+        ORDER BY tablename
       `;
+      expect(result.map((row) => row.tablename)).toEqual([
+        "_prisma_migrations",
+      ]);
+    });
 
-      for (const row of result) {
-        expect(row.rowsecurity).toBe(true);
-      }
+    it("isolates SELECT/INSERT/UPDATE/DELETE between two tenants as the application role", async () => {
+      if (!prisma) return;
+
+      // Fixtures are created as the owner, who bypasses RLS.
+      const tenantA = await prisma.tenant.create({
+        data: { name: "RLS Tenant A", slug: "rls-tenant-a", status: "ACTIVE" },
+      });
+      const tenantB = await prisma.tenant.create({
+        data: { name: "RLS Tenant B", slug: "rls-tenant-b", status: "ACTIVE" },
+      });
+      const actor = await prisma.user.create({
+        data: {
+          email: "rls-actor@test.com",
+          name: "RLS Actor",
+          password: "hash",
+          status: "ACTIVE",
+        },
+      });
+      const contactA = await prisma.contact.create({
+        data: { tenantId: tenantA.id, type: "INDIVIDUAL", firstName: "Alpha" },
+      });
+      const contactB = await prisma.contact.create({
+        data: { tenantId: tenantB.id, type: "INDIVIDUAL", firstName: "Bravo" },
+      });
+
+      // Everything below runs as amisibiz_app with tenant A in context — the
+      // posture the application takes once RLS is activated (Phase 08).
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL ROLE amisibiz_app`);
+        // `set_tenant_context` returns void; cast to text so Prisma can
+        // deserialize the row.
+        await tx.$queryRawUnsafe(
+          `SELECT set_tenant_context($1, $2)::text AS ok`,
+          tenantA.id,
+          actor.id,
+        );
+
+        // SELECT: tenant B is invisible.
+        const visible = await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM "Contact" ORDER BY id
+        `;
+        expect(visible.map((row) => row.id)).toEqual([contactA.id]);
+
+        // INSERT: own tenant succeeds.
+        await tx.$executeRawUnsafe(
+          `INSERT INTO "Contact" ("id","tenantId","type","firstName","updatedAt")
+           VALUES ('rls-contact-c', $1, 'INDIVIDUAL', 'Charlie', now())`,
+          tenantA.id,
+        );
+
+        // UPDATE: the foreign row is not reachable; the own row is.
+        const updatedForeign = await tx.$executeRawUnsafe(
+          `UPDATE "Contact" SET "firstName" = 'Hacked' WHERE "id" = $1`,
+          contactB.id,
+        );
+        expect(updatedForeign).toBe(0);
+        const updatedOwn = await tx.$executeRawUnsafe(
+          `UPDATE "Contact" SET "firstName" = 'Alpha 2' WHERE "id" = $1`,
+          contactA.id,
+        );
+        expect(updatedOwn).toBe(1);
+
+        // DELETE: the foreign row is not reachable.
+        const deletedForeign = await tx.$executeRawUnsafe(
+          `DELETE FROM "Contact" WHERE "id" = $1`,
+          contactB.id,
+        );
+        expect(deletedForeign).toBe(0);
+      });
+
+      // INSERT into a foreign tenant is denied by the WITH CHECK clause. This
+      // runs in its own transaction: a policy violation aborts the whole
+      // transaction, so it cannot share one with the assertions above.
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(`SET LOCAL ROLE amisibiz_app`);
+          await tx.$queryRawUnsafe(
+            `SELECT set_tenant_context($1, $2)::text AS ok`,
+            tenantA.id,
+            actor.id,
+          );
+          await tx.$executeRawUnsafe(
+            `INSERT INTO "Contact" ("id","tenantId","type","firstName","updatedAt")
+             VALUES ('rls-contact-x', $1, 'INDIVIDUAL', 'Oscar', now())`,
+            tenantB.id,
+          );
+        }),
+      ).rejects.toThrow(/row-level security/i);
+
+      // With no tenant context set, RLS fails closed: nothing is visible.
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL ROLE amisibiz_app`);
+        const visible = await tx.$queryRaw<{ count: bigint }[]>`
+          SELECT count(*)::bigint AS count FROM "Contact"
+        `;
+        expect(visible).toHaveLength(1);
+        expect(Number(visible[0]?.count ?? -1n)).toBe(0);
+      });
+
+      // As the owner, confirm tenant B's row was never altered or removed.
+      const foreignStillThere = await prisma.contact.findUnique({
+        where: { id: contactB.id },
+        select: { firstName: true },
+      });
+      expect(foreignStillThere?.firstName).toBe("Bravo");
+
+      // Clean up this test's fixtures.
+      await prisma.contact.deleteMany({
+        where: { id: { in: [contactA.id, contactB.id, "rls-contact-c"] } },
+      });
+      await prisma.user.delete({ where: { id: actor.id } });
+      await prisma.tenant.deleteMany({
+        where: { id: { in: [tenantA.id, tenantB.id] } },
+      });
     });
   });
 

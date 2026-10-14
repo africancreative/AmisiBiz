@@ -23,10 +23,15 @@ ALTER TABLE "Invitation" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "AuditLog" ENABLE ROW LEVEL SECURITY;
 
 -- 2. Create the application database role (least-privileged)
+-- Deliberately password-less: a migration must never carry a credential, and a
+-- well-known placeholder password on a production login role is a security
+-- hole (rules 8/9). The role cannot be password-authenticated into until RLS
+-- activation (Phase 08) sets a strong one out-of-band:
+--   ALTER ROLE amisibiz_app PASSWORD '<openssl rand -base64 32>';
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'amisibiz_app') THEN
-        CREATE ROLE amisibiz_app NOINHERIT LOGIN PASSWORD 'CHANGE_ME_IN_PRODUCTION';
+        CREATE ROLE amisibiz_app NOINHERIT LOGIN;
     END IF;
 END
 $$;

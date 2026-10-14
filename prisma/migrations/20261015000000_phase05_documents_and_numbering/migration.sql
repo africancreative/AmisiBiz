@@ -553,11 +553,26 @@ CREATE OR REPLACE FUNCTION document_child_belongs_to_document_tenant(
     p_tenant_id text, p_document_id text, p_child text
 ) RETURNS void AS $$
 BEGIN
-    IF p_tenant_id IS NULL OR p_document_id IS NULL OR NOT EXISTS (
+    IF p_tenant_id IS NULL OR p_document_id IS NULL THEN
+        RAISE EXCEPTION 'Cannot write % without a document and a tenant', p_child
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- Three different failures, three different messages: an operator reading a
+    -- rejected write should not have to guess which one happened. Under row
+    -- level security a parent in another tenant is invisible here, so that case
+    -- correctly reports "does not exist" rather than leaking that it does.
+    IF NOT EXISTS (SELECT 1 FROM "Document" d WHERE d."id" = p_document_id) THEN
+        RAISE EXCEPTION 'Cannot write %: document % does not exist', p_child, p_document_id
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF NOT EXISTS (
         SELECT 1 FROM "Document" d
         WHERE d."id" = p_document_id AND d."tenantId" = p_tenant_id
     ) THEN
-        RAISE EXCEPTION '% % does not belong to tenant %', initcap(p_child), p_document_id, p_tenant_id
+        RAISE EXCEPTION 'Cannot write %: document % is not a document of tenant %',
+            p_child, p_document_id, p_tenant_id
             USING ERRCODE = 'check_violation';
     END IF;
 END;
@@ -565,9 +580,14 @@ $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION document_child_is_same_tenant()
 RETURNS trigger AS $$
+DECLARE
+    p_label text := CASE TG_TABLE_NAME
+        WHEN 'DocumentLine' THEN 'a document line'
+        WHEN 'DocumentPayment' THEN 'a payment'
+        ELSE 'a status event' END;
 BEGIN
     PERFORM document_child_belongs_to_document_tenant(
-        NEW."tenantId", NEW."documentId", TG_TABLE_NAME);
+        NEW."tenantId", NEW."documentId", p_label);
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -705,70 +725,53 @@ RETURNS trigger AS $$
 DECLARE
     v_status "DocumentStatus";
 BEGIN
-    SELECT d."status" INTO v_status FROM "Document" d WHERE d."id" = NEW."documentId";
-
+    -- The status is read through the document, never from the line, because a
+    -- delivery note line can belong to a document that is still a draft while
+    -- the sales document it delivers against has long been issued.
     IF TG_OP = 'DELETE' THEN
         SELECT d."status" INTO v_status FROM "Document" d WHERE d."id" = OLD."documentId";
+
         IF v_status IS DISTINCT FROM 'DRAFT' THEN
             RAISE EXCEPTION 'Lines cannot be removed from document % once it is issued', OLD."documentId"
                 USING ERRCODE = 'check_violation';
         END IF;
+
         RETURN OLD;
     END IF;
 
+    SELECT d."status" INTO v_status FROM "Document" d WHERE d."id" = NEW."documentId";
+
+    -- NULL (a document that is not there, or not visible) is not a draft.
     IF v_status IS DISTINCT FROM 'DRAFT' THEN
         IF TG_OP = 'INSERT' THEN
             RAISE EXCEPTION 'Lines cannot be added to document % once it is issued', NEW."documentId"
                 USING ERRCODE = 'check_violation';
         END IF;
 
-        IF NEW."deliveredQuantity" IS DISTINCT FROM OLD."deliveredQuantity" THEN
-            -- The only other column pair that may move with it is provenance of
-            -- the delivery itself; everything else must stay byte-identical.
-            IF NEW."id" <> OLD."id" OR NEW."tenantId" <> OLD."tenantId"
-            OR NEW."documentId" <> OLD."documentId" OR NEW."position" <> OLD."position"
-            OR NEW."itemId" IS DISTINCT FROM OLD."itemId"
-            OR NEW."sourceLineId" IS DISTINCT FROM OLD."sourceLineId"
-            OR NEW."description" IS DISTINCT FROM OLD."description"
-            OR NEW."itemCode" IS DISTINCT FROM OLD."itemCode"
-            OR NEW."unitOfMeasure" IS DISTINCT FROM OLD."unitOfMeasure"
-            OR NEW."quantity" <> OLD."quantity"
-            OR NEW."unitPrice" <> OLD."unitPrice"
-            OR NEW."discountType" IS DISTINCT FROM OLD."discountType"
-            OR NEW."discountPercent" <> OLD."discountPercent"
-            OR NEW."discountAmount" <> OLD."discountAmount"
-            OR NEW."lineTotal" <> OLD."lineTotal"
-            OR NEW."lineDiscount" <> OLD."lineDiscount"
-            OR NEW."lineNet" <> OLD."lineNet"
-            OR NEW."lineTax" <> OLD."lineTax"
-            OR NEW."taxRateId" IS DISTINCT FROM OLD."taxRateId"
-            OR NEW."taxName" IS DISTINCT FROM OLD."taxName"
-            OR NEW."taxRate" <> OLD."taxRate" THEN
-                RAISE EXCEPTION 'Document line % belongs to an issued document; only its delivered quantity may change',
-                    OLD."id"
-                    USING ERRCODE = 'check_violation';
-            END IF;
-        ELSIF NEW."id" <> OLD."id"
-            OR NEW."tenantId" <> OLD."tenantId"
-            OR NEW."documentId" <> OLD."documentId"
-            OR NEW."position" <> OLD."position"
-            OR NEW."itemId" IS DISTINCT FROM OLD."itemId"
-            OR NEW."sourceLineId" IS DISTINCT FROM OLD."sourceLineId"
-            OR NEW."description" IS DISTINCT FROM OLD."description"
-            OR NEW."itemCode" IS DISTINCT FROM OLD."itemCode"
-            OR NEW."unitOfMeasure" IS DISTINCT FROM OLD."unitOfMeasure"
-            OR NEW."quantity" <> OLD."quantity"
-            OR NEW."unitPrice" <> OLD."unitPrice"
-            OR NEW."discountType" IS DISTINCT FROM OLD."discountType"
-            OR NEW."discountPercent" <> OLD."discountPercent"
-            OR NEW."discountAmount" <> OLD."discountAmount"
-            OR NEW."lineTotal" <> OLD."lineTotal"
-            OR NEW."lineDiscount" <> OLD."lineDiscount"
-            OR NEW."lineNet" <> OLD."lineNet"
-            OR NEW."lineTax" <> OLD."lineTax"
-            OR NEW."taxRateId" IS DISTINCT FROM OLD."taxRateId"
-            OR NEW."taxName" IS DISTINCT FROM OLD."taxName"
-            OR NEW."taxRate" <> OLD."taxRate" THEN
+        -- "deliveredQuantity" is deliberately absent from this list: recording a
+        -- delivery against an issued sales document is a delivery fact, not an
+        -- edit of the document. Everything the document says must stay put.
+        IF NEW."id" <> OLD."id"
+        OR NEW."tenantId" IS DISTINCT FROM OLD."tenantId"
+        OR NEW."documentId" IS DISTINCT FROM OLD."documentId"
+        OR NEW."position" IS DISTINCT FROM OLD."position"
+        OR NEW."itemId" IS DISTINCT FROM OLD."itemId"
+        OR NEW."sourceLineId" IS DISTINCT FROM OLD."sourceLineId"
+        OR NEW."description" IS DISTINCT FROM OLD."description"
+        OR NEW."itemCode" IS DISTINCT FROM OLD."itemCode"
+        OR NEW."unitOfMeasure" IS DISTINCT FROM OLD."unitOfMeasure"
+        OR NEW."quantity" IS DISTINCT FROM OLD."quantity"
+        OR NEW."unitPrice" IS DISTINCT FROM OLD."unitPrice"
+        OR NEW."discountType" IS DISTINCT FROM OLD."discountType"
+        OR NEW."discountPercent" IS DISTINCT FROM OLD."discountPercent"
+        OR NEW."discountAmount" IS DISTINCT FROM OLD."discountAmount"
+        OR NEW."lineTotal" IS DISTINCT FROM OLD."lineTotal"
+        OR NEW."lineDiscount" IS DISTINCT FROM OLD."lineDiscount"
+        OR NEW."lineNet" IS DISTINCT FROM OLD."lineNet"
+        OR NEW."lineTax" IS DISTINCT FROM OLD."lineTax"
+        OR NEW."taxRateId" IS DISTINCT FROM OLD."taxRateId"
+        OR NEW."taxName" IS DISTINCT FROM OLD."taxName"
+        OR NEW."taxRate" IS DISTINCT FROM OLD."taxRate" THEN
             RAISE EXCEPTION 'Document line % belongs to an issued document and is immutable',
                 OLD."id"
                 USING ERRCODE = 'check_violation';
@@ -799,19 +802,28 @@ BEGIN
                 USING ERRCODE = 'check_violation';
         END IF;
 
-        IF NEW."id" <> OLD."id" OR NEW."tenantId" <> OLD."tenantId"
-        OR NEW."documentId" <> OLD."documentId" OR NEW."amount" <> OLD."amount"
-        OR NEW."occurredOn" <> OLD."occurredOn" OR NEW."method" <> OLD."method"
+        -- Only the reversal pair may move. A wrong payment is reversed and
+        -- recorded again, so the balance history of the invoice stays whole.
+        IF NEW."id" <> OLD."id"
+        OR NEW."tenantId" IS DISTINCT FROM OLD."tenantId"
+        OR NEW."documentId" IS DISTINCT FROM OLD."documentId"
+        OR NEW."amount" <> OLD."amount"
+        OR NEW."occurredOn" <> OLD."occurredOn"
+        OR NEW."method" <> OLD."method"
         OR NEW."reference" IS DISTINCT FROM OLD."reference"
         OR NEW."note" IS DISTINCT FROM OLD."note"
-        OR NEW."createdAt" IS DISTINCT FROM OLD."createdAt" THEN
+        OR NEW."createdAt" <> OLD."createdAt"
+        OR NEW."reversedAt" IS DISTINCT FROM OLD."reversedAt"
+            AND NEW."reversedBy" IS DISTINCT FROM OLD."reversedBy" THEN
             RAISE EXCEPTION 'Document payment % is immutable; reverse it and record a new payment',
                 OLD."id"
                 USING ERRCODE = 'check_violation';
         END IF;
+
+        RETURN NEW;
     END IF;
 
-    RETURN COALESCE(NEW, OLD);
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -858,11 +870,18 @@ CREATE TRIGGER document_status_event_actor_is_consistent
 -- migration, which is what lets them reach the counter rows regardless of the
 -- row level security policies below; they are the only sanctioned path to the
 -- counters and they always filter by the tenant they were handed.
+--
+-- The date is a required argument and is a DATE, not a timestamp: the period a
+-- number belongs to is the period of the document's own issue date, so a
+-- back-dated invoice lands in the series its date says rather than in whatever
+-- year the wall clock had reached by the time the request was served. Taking a
+-- `date` also keeps the year out of the reach of the session `TimeZone` setting,
+-- which `to_char(timestamptz, 'YYYY')` would otherwise apply silently.
 
 CREATE OR REPLACE FUNCTION document_number_period(
     p_period_style "DocumentPeriodStyle",
     p_fiscal_start_month integer,
-    p_date timestamptz
+    p_date date
 ) RETURNS text AS $$
 DECLARE
     v_year integer;
@@ -888,12 +907,12 @@ BEGIN
 
     RETURN v_year::text || '/' || lpad(((v_year + 1) % 100)::text, 2, '0');
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql IMMUTABLE;
 
 CREATE OR REPLACE FUNCTION allocate_document_number(
     p_tenant_id text,
     p_type "DocumentType",
-    p_date timestamptz DEFAULT now()
+    p_date date
 ) RETURNS text AS $$
 DECLARE
     v_prefix     text;
@@ -957,11 +976,12 @@ BEGIN
        SET "nextValue" = "nextValue" + 1, "updatedAt" = CURRENT_TIMESTAMP
      WHERE "tenantId" = p_tenant_id AND "type" = p_type AND "period" = v_period;
 
-    v_number := v_prefix
-             || CASE WHEN v_prefix = '' OR v_period = '' THEN '' ELSE v_separator END
-             || v_period
-             || CASE WHEN v_period = '' THEN '' ELSE v_separator END
-             || lpad(v_value::text, v_padding, '0');
+    -- The separator joins the parts that exist. Joining with `array_to_string`
+    -- instead of concatenating means a `NONE` period produces `ACME.001` rather
+    -- than `ACME001`, and an empty prefix never leaves a leading separator.
+    v_number := array_to_string(
+        ARRAY[NULLIF(v_prefix, ''), NULLIF(v_period, ''), lpad(v_value::text, v_padding, '0')],
+        v_separator);
 
     IF v_number !~ '^[A-Za-z0-9][A-Za-z0-9/_.-]{0,63}$' THEN
         RAISE EXCEPTION 'Generated document number % is not a safe identifier', v_number
@@ -979,7 +999,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 CREATE OR REPLACE FUNCTION peek_document_number(
     p_tenant_id text,
     p_type "DocumentType",
-    p_date timestamptz DEFAULT now()
+    p_date date
 ) RETURNS text AS $$
 DECLARE
     v_prefix    text;
@@ -1016,17 +1036,17 @@ BEGIN
 
     v_value := COALESCE(v_value, 1);
 
-    RETURN v_prefix
-         || CASE WHEN v_prefix = '' OR v_period = '' THEN '' ELSE v_separator END
-         || v_period
-         || CASE WHEN v_period = '' THEN '' ELSE v_separator END
-         || lpad(v_value::text, v_padding, '0');
+    -- Same composition rule as `allocate_document_number()`; the two must never
+    -- disagree, or the preview on the numbering screen would lie.
+    RETURN array_to_string(
+        ARRAY[NULLIF(v_prefix, ''), NULLIF(v_period, ''), lpad(v_value::text, v_padding, '0')],
+        v_separator);
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 
-REVOKE ALL ON FUNCTION allocate_document_number(text, "DocumentType", timestamptz) FROM PUBLIC;
-REVOKE ALL ON FUNCTION peek_document_number(text, "DocumentType", timestamptz) FROM PUBLIC;
-REVOKE ALL ON FUNCTION document_number_period("DocumentPeriodStyle", integer, timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION allocate_document_number(text, "DocumentType", date) FROM PUBLIC;
+REVOKE ALL ON FUNCTION peek_document_number(text, "DocumentType", date) FROM PUBLIC;
+REVOKE ALL ON FUNCTION document_number_period("DocumentPeriodStyle", integer, date) FROM PUBLIC;
 
 -- ─── Row level security ──────────────────────────────────────────────────────
 -- Defence in depth behind the application's `authorizeTenant()` check. Same
@@ -1069,21 +1089,46 @@ CREATE POLICY document_number_sequence_tenant_isolation ON "DocumentNumberSequen
     WITH CHECK ("tenantId" = current_tenant_id() OR is_platform_admin());
 
 -- ─── Grants ──────────────────────────────────────────────────────────────────
--- The app role needs DML on the new tables (the defaults granted in
--- 20261013000001 only cover tables that existed when it ran). The counter table
--- is deliberately narrower than the others: it is read and moved only through
--- `allocate_document_number()` / `peek_document_number()`, so the app is not
--- given INSERT or DELETE — deleting a counter row would restart a series and
--- hand out an already issued number.
+-- The blanket default privileges set in 20261013000001
+-- (`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE,
+-- DELETE ON TABLES TO amisibiz_app`) already apply to every table created after
+-- it, so the counter table needs an explicit REVOKE — a narrower GRANT alone
+-- would change nothing. Check 22 of `phase05-migration-checks.sql` caught
+-- exactly that: a direct DELETE of a counter row succeeded.
+--
+-- The counter is read and moved only through `allocate_document_number()` /
+-- `peek_document_number()`: without DELETE a counter row cannot be removed to
+-- restart a series, and without INSERT it cannot be forged. The series
+-- configuration keeps INSERT (a tenant may open a series the migration did not
+-- create) and UPDATE (prefixes are configurable), but no DELETE: removing a
+-- series cascades to its counters.
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON
-    "DocumentLine", "DocumentPayment", "DocumentStatusEvent", "DocumentNumbering"
+    "DocumentLine", "DocumentPayment", "DocumentStatusEvent"
     TO amisibiz_app;
 
+REVOKE ALL ON "DocumentNumbering" FROM amisibiz_app;
+GRANT SELECT, INSERT, UPDATE ON "DocumentNumbering" TO amisibiz_app;
+
+REVOKE ALL ON "DocumentNumberSequence" FROM amisibiz_app;
 GRANT SELECT, UPDATE ON "DocumentNumberSequence" TO amisibiz_app;
 
-GRANT EXECUTE ON FUNCTION allocate_document_number(text, "DocumentType", timestamptz) TO amisibiz_app;
-GRANT EXECUTE ON FUNCTION peek_document_number(text, "DocumentType", timestamptz) TO amisibiz_app;
+-- `public.schema_migrations` is not ours: a different application (AmisERP)
+-- shares this database and keeps its migration tracker there. The blanket
+-- `GRANT ... ON ALL TABLES IN SCHEMA public` in 20261013000001 swept it in;
+-- hand those privileges back so the AmisiBiz app role can never touch another
+-- system's bookkeeping. Conditional because a dedicated database has no such
+-- table, and this migration must apply cleanly either way.
+DO $$
+BEGIN
+    IF to_regclass('public.schema_migrations') IS NOT NULL THEN
+        EXECUTE 'REVOKE ALL ON public.schema_migrations FROM amisibiz_app';
+    END IF;
+END
+$$;
+
+GRANT EXECUTE ON FUNCTION allocate_document_number(text, "DocumentType", date) TO amisibiz_app;
+GRANT EXECUTE ON FUNCTION peek_document_number(text, "DocumentType", date) TO amisibiz_app;
 
 -- ─── Comments ────────────────────────────────────────────────────────────────
 
@@ -1111,9 +1156,9 @@ COMMENT ON INDEX "document_one_invoice_per_source" IS
 COMMENT ON INDEX "DocumentNumberSequence_tenantId_type_period_key" IS
     'One counter per tenant, document series and period (calendar year, financial year, or none).';
 
-COMMENT ON FUNCTION allocate_document_number(text, "DocumentType", timestamptz) IS
+COMMENT ON FUNCTION allocate_document_number(text, "DocumentType", date) IS
     'Allocates the next document number for a tenant series inside the caller''s transaction, locking the counter row with SELECT ... FOR UPDATE. Never called from the browser; the number it returns is the only authoritative one.';
-COMMENT ON FUNCTION peek_document_number(text, "DocumentType", timestamptz) IS
+COMMENT ON FUNCTION peek_document_number(text, "DocumentType", date) IS
     'Returns the number the series would use next without taking it. Display only and not authoritative.';
 COMMENT ON FUNCTION document_is_immutable_after_issue() IS
     'Blocks edits to the financially material content of an issued document and blocks deleting anything that is not a draft.';
