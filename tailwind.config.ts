@@ -62,6 +62,7 @@ const config: Config = {
         tenant: {
           DEFAULT: "hsl(var(--tenant-primary) / <alpha-value>)",
           foreground: "hsl(var(--tenant-primary-foreground) / <alpha-value>)",
+          secondary: "hsl(var(--tenant-secondary) / <alpha-value>)",
           accent: "hsl(var(--tenant-accent) / <alpha-value>)",
           "accent-foreground":
             "hsl(var(--tenant-accent-foreground) / <alpha-value>)",

@@ -19,6 +19,9 @@ next-env.d.ts
 prisma/*.db
 prisma/*.db-journal
 
+# Tenant uploads — private business data, never commit
+uploads/
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

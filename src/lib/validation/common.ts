@@ -82,3 +82,73 @@ export const passwordsMatch = {
   message: "Passwords do not match",
   path: ["confirmPassword"] as const,
 };
+
+/**
+ * Currencies AmisiBiz writes amounts in. Phase 04 supports KES only; the list is
+ * the single source of truth, so enabling another ISO 4217 code is a one-line
+ * change here plus the corresponding tenant/document rollout.
+ */
+export const SUPPORTED_CURRENCIES = ["KES"] as const;
+
+export type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
+
+export const DEFAULT_CURRENCY: SupportedCurrency = "KES";
+
+/**
+ * Display labels for the supported codes, kept beside the list so a currency
+ * cannot be enabled without a human-readable name in the UI.
+ */
+export const CURRENCY_LABELS: Record<SupportedCurrency, string> = {
+  KES: "KES - Kenyan Shilling",
+};
+
+/** Narrows arbitrary stored text to a supported currency, else the default. */
+export function toSupportedCurrency(value: string): SupportedCurrency {
+  return (SUPPORTED_CURRENCIES as readonly string[]).includes(value)
+    ? (value as SupportedCurrency)
+    : DEFAULT_CURRENCY;
+}
+
+/** ISO 4217 code restricted to the supported set. */
+export const currencySchema = z
+  .string()
+  .trim()
+  .transform((value) => value.toUpperCase())
+  .refine(
+    (value): value is SupportedCurrency =>
+      (SUPPORTED_CURRENCIES as readonly string[]).includes(value),
+    `Unsupported currency. Supported: ${SUPPORTED_CURRENCIES.join(", ")}`,
+  );
+
+/**
+ * Monetary and rate inputs as decimal **strings**.
+ *
+ * Authoritative amounts are never parsed through a JS `number`: the string goes
+ * straight into `Decimal` / PostgreSQL `numeric`, so totals stay exact. The
+ * optional `maxPlaces` mirrors the column scale (4 for amounts, 2 for
+ * percentages).
+ */
+export function decimalStringSchema(maxPlaces = 4) {
+  const pattern = new RegExp(`^\\d+(\\.\\d{1,${maxPlaces}})?$`);
+  return z.string().regex(pattern, {
+    message: `Must be a decimal string with up to ${maxPlaces} decimal places`,
+  });
+}
+
+/** A non-negative money amount (major units, up to 4 decimal places). */
+export const moneySchema = decimalStringSchema(4).refine(
+  (value) => Number(value) < 1e12,
+  "Amount is too large",
+);
+
+/** A percentage between 0 and 100 inclusive (up to 2 decimal places). */
+export const percentSchema = decimalStringSchema(2).refine(
+  (value) => Number(value) <= 100,
+  "Must be between 0 and 100",
+);
+
+/** A tax rate fraction between 0 and 1 inclusive (up to 4 decimal places). */
+export const taxRateFractionSchema = decimalStringSchema(4).refine(
+  (value) => Number(value) <= 1,
+  "Rate must be between 0 and 1 (e.g. 0.16 for 16%)",
+);

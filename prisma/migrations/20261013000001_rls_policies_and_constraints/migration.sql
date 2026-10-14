@@ -1,6 +1,17 @@
 -- Migration: Add RLS policies, partial unique index, invitation token hashing, and least-privileged role
 -- Created: 2026-10-13
 -- Phase 02 Security Hardening
+--
+-- NOTE (Phase 04 review, 2026-10-14): this file had never been applied to any
+-- database. Its policies referenced `tenant_id` / `user_id`, but the tables come
+-- from `prisma/schema.prisma`, which creates camelCase columns ("tenantId",
+-- "userId") with no `@map`, so applying it would fail on the first policy with
+-- `column "tenant_id" does not exist`. The predicates now use the quoted
+-- camelCase identifiers the init migration actually creates. `pgcrypto` is
+-- enabled because the invitation-token backfill below calls `digest()`.
+
+-- pgcrypto: required by digest() in the Invitation token backfill (section 14).
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- 1. Enable RLS on all tenant-scoped tables
 ALTER TABLE "Tenant" ENABLE ROW LEVEL SECURITY;
@@ -62,8 +73,8 @@ CREATE POLICY tenant_member_select ON "Tenant"
         id = current_tenant_id() AND
         EXISTS (
             SELECT 1 FROM "TenantMember" tm
-            WHERE tm.tenant_id = "Tenant".id
-            AND tm.user_id = current_user_id()
+            WHERE tm."tenantId" = "Tenant".id
+            AND tm."userId" = current_user_id()
         )
     );
 
@@ -71,30 +82,30 @@ CREATE POLICY tenant_member_select ON "Tenant"
 CREATE POLICY tenant_settings_tenant_isolation ON "TenantSettings"
     FOR ALL TO amisibiz_app
     USING (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     )
     WITH CHECK (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     );
 
 -- 6. RLS Policies for TenantBranding
 CREATE POLICY tenant_branding_tenant_isolation ON "TenantBranding"
     FOR ALL TO amisibiz_app
     USING (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     )
     WITH CHECK (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     );
 
 -- 7. RLS Policies for TenantDomain
 CREATE POLICY tenant_domain_tenant_isolation ON "TenantDomain"
     FOR ALL TO amisibiz_app
     USING (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     )
     WITH CHECK (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     );
 
 -- 8. RLS Policies for TenantMember
@@ -102,7 +113,7 @@ CREATE POLICY tenant_domain_tenant_isolation ON "TenantDomain"
 CREATE POLICY tenant_member_tenant_isolation ON "TenantMember"
     FOR SELECT TO amisibiz_app
     USING (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     );
 
 -- Platform admins can manage all memberships
@@ -115,22 +126,22 @@ CREATE POLICY tenant_member_platform_admin_all ON "TenantMember"
 CREATE POLICY tenant_member_self_update ON "TenantMember"
     FOR UPDATE TO amisibiz_app
     USING (
-        tenant_id = current_tenant_id() AND
-        user_id = current_user_id()
+        "tenantId" = current_tenant_id() AND
+        "userId" = current_user_id()
     )
     WITH CHECK (
-        tenant_id = current_tenant_id() AND
-        user_id = current_user_id()
+        "tenantId" = current_tenant_id() AND
+        "userId" = current_user_id()
     );
 
 -- 9. RLS Policies for Invitation
 CREATE POLICY invitation_tenant_isolation ON "Invitation"
     FOR ALL TO amisibiz_app
     USING (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     )
     WITH CHECK (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     );
 
 -- 10. RLS Policies for AuditLog
@@ -138,7 +149,7 @@ CREATE POLICY invitation_tenant_isolation ON "Invitation"
 CREATE POLICY audit_log_tenant_read ON "AuditLog"
     FOR SELECT TO amisibiz_app
     USING (
-        tenant_id = current_tenant_id() OR is_platform_admin()
+        "tenantId" = current_tenant_id() OR is_platform_admin()
     );
 
 -- Platform admins can read all audit logs (including system-level null tenant_id)
@@ -166,18 +177,18 @@ CREATE POLICY user_self_select ON "User"
 -- These are auth tables - only accessible by user themselves or platform admin
 CREATE POLICY account_self_access ON "Account"
     FOR ALL TO amisibiz_app
-    USING (user_id = current_user_id() OR is_platform_admin())
-    WITH CHECK (user_id = current_user_id() OR is_platform_admin());
+    USING ("userId" = current_user_id() OR is_platform_admin())
+    WITH CHECK ("userId" = current_user_id() OR is_platform_admin());
 
 CREATE POLICY session_self_access ON "Session"
     FOR ALL TO amisibiz_app
-    USING (user_id = current_user_id() OR is_platform_admin())
-    WITH CHECK (user_id = current_user_id() OR is_platform_admin());
+    USING ("userId" = current_user_id() OR is_platform_admin())
+    WITH CHECK ("userId" = current_user_id() OR is_platform_admin());
 
 CREATE POLICY account_token_self_access ON "AccountToken"
     FOR ALL TO amisibiz_app
-    USING (user_id = current_user_id() OR is_platform_admin())
-    WITH CHECK (user_id = current_user_id() OR is_platform_admin());
+    USING ("userId" = current_user_id() OR is_platform_admin())
+    WITH CHECK ("userId" = current_user_id() OR is_platform_admin());
 
 -- 13. Add partial unique index for default tenant membership (R5b)
 -- Ensures only one default tenant per user
@@ -213,13 +224,14 @@ GRANT SELECT ON "User" TO amisibiz_app;
 GRANT SELECT ON "TenantMember" TO amisibiz_app;
 
 -- 17. Create a helper function for the application to set tenant context
--- This should be called at the start of each request with a tenant context
+-- The settings are TRANSACTION LOCAL (third argument `true`): a pooled
+-- connection must never carry one tenant's context into the next request.
 CREATE OR REPLACE FUNCTION set_tenant_context(p_tenant_id text, p_user_id text, p_is_platform_admin boolean DEFAULT false)
 RETURNS void AS $$
 BEGIN
-    PERFORM set_config('app.current_tenant_id', p_tenant_id, false);
-    PERFORM set_config('app.current_user_id', p_user_id, false);
-    PERFORM set_config('app.is_platform_admin', p_is_platform_admin::text, false);
+    PERFORM set_config('app.current_tenant_id', p_tenant_id, true);
+    PERFORM set_config('app.current_user_id', p_user_id, true);
+    PERFORM set_config('app.is_platform_admin', p_is_platform_admin::text, true);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 

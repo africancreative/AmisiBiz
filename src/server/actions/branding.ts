@@ -1,37 +1,93 @@
 "use server";
 
+import { type TenantBranding } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/helpers";
 import { authorizeTenant } from "@/server/auth/authorization";
 import { PERMISSIONS } from "@/lib/auth/permissions";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
-import { updateTenantBrandingSchema, logoUploadSchema, type UpdateTenantBrandingInput } from "@/lib/validations/branding";
-import type { Prisma } from "@prisma/client";
-import type { ActionResult } from "@/lib/errors";
+import { fail, type ActionResult } from "@/lib/errors";
+import { authorizationFailure, invalidInput } from "@/server/actions/_shared";
+import {
+  updateTenantBrandingSchema,
+  brandingFieldsSchema,
+} from "@/lib/validations/branding";
+import { meetsContrastMinimum } from "@/lib/branding/contrast";
+import { z } from "zod";
 
-function authzError<T = void>(error: unknown): ActionResult<T> {
-  if (error instanceof Error && /not permitted|access/i.test(error.message)) {
-    return { success: false, error: error.message };
+const tenantLocatorSchema = z.object({
+  tenantId: z.string().cuid("Invalid tenant ID"),
+});
+
+/**
+ * Build the write payload from the validated fields only.
+ *
+ * Free-text fields treat an empty string as "clear this value" — that is the
+ * only way a business can remove a website or footer it previously saved.
+ * Colour, currency and layout fields are never nullable (the row keeps a
+ * documented default), so an empty value there is a validation failure rather
+ * than a silent reset.
+ */
+type BrandingPatch = {
+  displayName?: string | null;
+  registeredName?: string | null;
+  primaryColor?: string;
+  secondaryColor?: string;
+  accentColor?: string;
+  primaryForeground?: string;
+  contactEmail?: string | null;
+  contactPhone?: string | null;
+  postalAddress?: string | null;
+  physicalAddress?: string | null;
+  website?: string | null;
+  taxPin?: string | null;
+  currency?: string;
+  defaultFooter?: string | null;
+  paymentInstructions?: string | null;
+  documentLayout?: "standard" | "compact" | "detailed";
+};
+
+function toBrandingPatch(
+  data: z.infer<typeof brandingFieldsSchema>,
+): BrandingPatch {
+  const clearable = (value: string | undefined): string | null =>
+    value === undefined ? null : value.trim() || null;
+
+  const patch: BrandingPatch = {};
+
+  if (data.displayName !== undefined)
+    patch.displayName = clearable(data.displayName);
+  if (data.registeredName !== undefined)
+    patch.registeredName = clearable(data.registeredName);
+  if (data.primaryColor !== undefined) patch.primaryColor = data.primaryColor;
+  if (data.secondaryColor !== undefined)
+    patch.secondaryColor = data.secondaryColor;
+  if (data.accentColor !== undefined) patch.accentColor = data.accentColor;
+  if (data.primaryForeground !== undefined)
+    patch.primaryForeground = data.primaryForeground;
+  if (data.contactEmail !== undefined)
+    patch.contactEmail = clearable(data.contactEmail?.toLowerCase());
+  if (data.contactPhone !== undefined)
+    patch.contactPhone = clearable(data.contactPhone);
+  if (data.postalAddress !== undefined)
+    patch.postalAddress = clearable(data.postalAddress);
+  if (data.physicalAddress !== undefined)
+    patch.physicalAddress = clearable(data.physicalAddress);
+  if (data.website !== undefined) {
+    // Only an absolute http(s) URL survived validation; anything else (e.g.
+    // `javascript:`) was rejected by the schema.
+    patch.website = data.website.trim() || null;
   }
-  return {
-    success: false,
-    error: "You are not permitted to perform this action.",
-  };
-}
+  if (data.taxPin !== undefined) patch.taxPin = clearable(data.taxPin);
+  if (data.currency !== undefined) patch.currency = data.currency;
+  if (data.defaultFooter !== undefined)
+    patch.defaultFooter = clearable(data.defaultFooter);
+  if (data.paymentInstructions !== undefined)
+    patch.paymentInstructions = clearable(data.paymentInstructions);
+  if (data.documentLayout !== undefined)
+    patch.documentLayout = data.documentLayout;
 
-function validateColourContrast(primary: string, foreground: string): boolean {
-  const getLuminance = (hex: string) => {
-    const rgb = parseInt(hex.replace("#", ""), 16);
-    const r = ((rgb >> 16) & 255) / 255;
-    const g = ((rgb >> 8) & 255) / 255;
-    const b = (rgb & 255) / 255;
-    const srgb = [r, g, b].map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
-    return 0.2126 * srgb[0] + 0.7152 * srgb[1] + 0.0722 * srgb[2];
-  };
-  const l1 = getLuminance(primary);
-  const l2 = getLuminance(foreground);
-  const contrast = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-  return contrast >= 4.5;
+  return patch;
 }
 
 export async function updateTenantBrandingAction(
@@ -39,169 +95,108 @@ export async function updateTenantBrandingAction(
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
-  const result = updateTenantBrandingSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = updateTenantBrandingSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { tenantId, ...data } = result.data;
+  const { tenantId, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.BUSINESS_SETTINGS_UPDATE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "updateTenantBrandingAction");
   }
 
+  // Contrast is enforced server-side, not just in the form: a direct call with
+  // unreadable colours must still be rejected.
   if (data.primaryColor && data.primaryForeground) {
-    if (!validateColourContrast(data.primaryColor, data.primaryForeground)) {
+    if (!meetsContrastMinimum(data.primaryColor, data.primaryForeground)) {
       return {
         success: false,
-        error: "Insufficient contrast between primary colour and foreground. Minimum 4.5:1 required.",
+        error:
+          "Insufficient contrast between primary colour and foreground. Minimum 4.5:1 required.",
+        code: "VALIDATION_ERROR",
         fieldErrors: { primaryForeground: ["Contrast ratio too low"] },
       };
     }
   }
 
-  const updateData: Prisma.TenantBrandingUpdateInput = {};
-  for (const [key, value] of Object.entries(data)) {
-    if (value !== undefined && value !== "") {
-      updateData[key] = value;
-    }
-  }
+  const patch = toBrandingPatch(data);
 
   try {
-    await prisma.tenantBranding.upsert({
-      where: { tenantId },
-      create: { tenantId, ...updateData },
-      update: updateData,
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.tenantBranding.findUnique({
+        where: { tenantId: context.tenantId },
+        select: { id: true },
+      });
+
+      if (existing) {
+        await tx.tenantBranding.update({
+          where: { id: existing.id },
+          data: patch,
+        });
+      } else {
+        await tx.tenantBranding.create({
+          data: { tenantId: context.tenantId, ...patch },
+        });
+      }
     });
 
     await recordAudit({
-      action: AUDIT_ACTIONS.TENANT_UPDATED,
+      action: AUDIT_ACTIONS.BRANDING_UPDATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "TenantBranding",
-      resourceId: tenantId,
-      metadata: { fields: Object.keys(updateData) },
+      resourceId: context.tenantId,
+      // Which fields changed, never the address/PIN values themselves.
+      metadata: { fields: Object.keys(patch), section: "branding" },
     });
 
     return { success: true };
   } catch (err) {
     console.error("[updateTenantBrandingAction]", err);
-    return { success: false, error: "Failed to update branding." };
+    return fail("Failed to update branding.", { code: "INTERNAL" });
   }
 }
 
-export async function getTenantBrandingAction(
-  tenantId: string,
-): Promise<ActionResult<{ branding: Prisma.TenantBrandingGetPayload<{}> | null }>> {
+export async function getTenantBrandingAction(tenantId: string): Promise<
+  ActionResult<{
+    branding: TenantBranding | null;
+  }>
+> {
   const session = await requireAuth();
 
+  const parsed = tenantLocatorSchema.safeParse({ tenantId });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.BUSINESS_SETTINGS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getTenantBrandingAction");
   }
 
   try {
     const branding = await prisma.tenantBranding.findUnique({
-      where: { tenantId },
+      where: { tenantId: context.tenantId },
     });
 
     return { success: true, data: { branding } };
   } catch (err) {
     console.error("[getTenantBrandingAction]", err);
-    return { success: false, error: "Failed to load branding." };
-  }
-}
-
-export async function uploadLogoAction(
-  rawInput: unknown,
-): Promise<ActionResult<{ logoUrl: string }>> {
-  const session = await requireAuth();
-
-  const result = logoUploadSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid upload parameters.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
-  }
-
-  const { tenantId, fileName, fileSize, fileType, width, height } = result.data;
-
-  try {
-    await authorizeTenant(
-      session.user.id,
-      tenantId,
-      PERMISSIONS.BUSINESS_SETTINGS_UPDATE,
-    );
-  } catch (err) {
-    return authzError(err);
-  }
-
-  const allowedTypes = ["image/png", "image/jpeg", "image/webp", "image/svg+xml"];
-  if (!allowedTypes.includes(fileType)) {
-    return {
-      success: false,
-      error: "Invalid file type. Allowed: PNG, JPEG, WebP, SVG.",
-      fieldErrors: { fileType: ["File type not allowed"] },
-    };
-  }
-
-  if (fileSize > 5 * 1024 * 1024) {
-    return {
-      success: false,
-      error: "File size must not exceed 5 MB.",
-      fieldErrors: { fileSize: ["File too large"] },
-    };
-  }
-
-  if (width > 2000 || height > 2000) {
-    return {
-      success: false,
-      error: "Image dimensions must not exceed 2000x2000 pixels.",
-      fieldErrors: { width: ["Dimensions too large"], height: ["Dimensions too large"] },
-    };
-  }
-
-  const ext = fileType.split("/")[1];
-  const storageKey = `tenants/${tenantId}/logo/${Date.now()}.${ext}`;
-  const logoUrl = `/api/storage/${storageKey}`;
-
-  try {
-    await prisma.tenantBranding.upsert({
-      where: { tenantId },
-      create: { tenantId, logoUrl },
-      update: { logoUrl },
-    });
-
-    await recordAudit({
-      action: AUDIT_ACTIONS.TENANT_UPDATED,
-      userId: session.user.id,
-      tenantId,
-      resource: "TenantBranding",
-      resourceId: tenantId,
-      metadata: { field: "logoUrl", storageKey },
-    });
-
-    return { success: true, data: { logoUrl } };
-  } catch (err) {
-    console.error("[uploadLogoAction]", err);
-    return { success: false, error: "Failed to update logo." };
+    return fail("Failed to load branding.", { code: "INTERNAL" });
   }
 }
 
@@ -210,34 +205,52 @@ export async function deleteLogoAction(
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
+  const parsed = tenantLocatorSchema.safeParse({ tenantId });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.BUSINESS_SETTINGS_UPDATE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "deleteLogoAction");
   }
 
   try {
+    const branding = await prisma.tenantBranding.findUnique({
+      where: { tenantId: context.tenantId },
+      select: { id: true, logoUrl: true },
+    });
+
+    if (!branding?.logoUrl) {
+      return fail("No logo is set.", { code: "NOT_FOUND" });
+    }
+
     await prisma.tenantBranding.update({
-      where: { tenantId },
+      where: { id: branding.id },
       data: { logoUrl: null },
     });
 
+    // The stored file lives under the tenant's private upload prefix; removing
+    // the reference makes it unreachable through the serving route, which
+    // re-checks membership on every read.
     await recordAudit({
-      action: AUDIT_ACTIONS.TENANT_UPDATED,
+      action: AUDIT_ACTIONS.BRANDING_LOGO_DELETED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "TenantBranding",
-      resourceId: tenantId,
+      resourceId: context.tenantId,
       metadata: { field: "logoUrl", removed: true },
     });
 
     return { success: true };
   } catch (err) {
     console.error("[deleteLogoAction]", err);
-    return { success: false, error: "Failed to remove logo." };
+    return fail("Failed to remove logo.", { code: "INTERNAL" });
   }
 }

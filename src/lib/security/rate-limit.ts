@@ -31,7 +31,11 @@ const memoryStore = new Map<string, Bucket>();
  * Uses a fixed-window algorithm with atomic INCR + EXPIRE.
  */
 interface RedisStore {
-  increment(key: string, windowMs: number, limit: number): Promise<RateLimitResult>;
+  increment(
+    key: string,
+    windowMs: number,
+    limit: number,
+  ): Promise<RateLimitResult>;
   reset(key?: string): Promise<void>;
 }
 
@@ -53,10 +57,13 @@ async function createRedisStore(): Promise<RedisStore | null> {
         const redisKey = `ratelimit:${key}`;
 
         // Atomic increment with expiry
-        const response = await fetch(`${upstashUrl}/incr/${encodeURIComponent(redisKey)}`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${upstashToken}` },
-        });
+        const response = await fetch(
+          `${upstashUrl}/incr/${encodeURIComponent(redisKey)}`,
+          {
+            method: "POST",
+            headers: { Authorization: `Bearer ${upstashToken}` },
+          },
+        );
 
         if (!response.ok) {
           throw new Error(`Upstash INCR failed: ${response.statusText}`);
@@ -66,10 +73,13 @@ async function createRedisStore(): Promise<RedisStore | null> {
 
         // Set expiry on first request
         if (count === 1) {
-          await fetch(`${upstashUrl}/expire/${encodeURIComponent(redisKey)}/${windowSec}`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${upstashToken}` },
-          });
+          await fetch(
+            `${upstashUrl}/expire/${encodeURIComponent(redisKey)}/${windowSec}`,
+            {
+              method: "POST",
+              headers: { Authorization: `Bearer ${upstashToken}` },
+            },
+          );
         }
 
         const resetAt = now + windowMs;
@@ -84,10 +94,13 @@ async function createRedisStore(): Promise<RedisStore | null> {
       },
       async reset(key) {
         if (key) {
-          await fetch(`${upstashUrl}/del/${encodeURIComponent(`ratelimit:${key}`)}`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${upstashToken}` },
-          });
+          await fetch(
+            `${upstashUrl}/del/${encodeURIComponent(`ratelimit:${key}`)}`,
+            {
+              method: "POST",
+              headers: { Authorization: `Bearer ${upstashToken}` },
+            },
+          );
         } else {
           // Note: Upstash doesn't support pattern delete via REST easily
           // This is a test helper; production should use specific keys
@@ -169,7 +182,10 @@ async function getRedisStore(): Promise<RedisStore | null> {
       console.log("[rate-limit] Using Redis/Upstash store");
     }
   } catch (err) {
-    console.warn("[rate-limit] Failed to initialize Redis store, falling back to memory:", err);
+    console.warn(
+      "[rate-limit] Failed to initialize Redis store, falling back to memory:",
+      err,
+    );
     redisStoreInitFailed = true;
   }
   return redisStore;

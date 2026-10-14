@@ -1,16 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import {
   TableContainer,
   Table,
@@ -24,10 +19,24 @@ import { Pagination } from "@/components/ui/pagination";
 import { EmptyState } from "@/components/ui/state";
 import { ContactDialog } from "@/components/contacts/contact-dialog";
 import { ContactItemsClient } from "@/components/contacts/contact-items-client";
-import { getContactAction, getContactBalanceAction, archiveContactAction, restoreContactAction } from "@/server/actions/contact";
-import { getContactItemsAction } from "@/server/actions/contact-item";
-import type { Contact, Document } from "@prisma/client";
-import { Loader2, Search, ChevronLeft, ChevronRight, Eye, Edit, Archive, RotateCcw, FileText, DollarSign, Package } from "lucide-react";
+import {
+  getContactAction,
+  getContactBalanceAction,
+  archiveContactAction,
+  restoreContactAction,
+  type ContactWithDetails,
+} from "@/server/actions/contact";
+import { getDocumentsAction } from "@/server/actions/document";
+import { formatMoney } from "@/lib/format/money";
+import {
+  Loader2,
+  Edit,
+  Archive,
+  RotateCcw,
+  DollarSign,
+  Package,
+  ChevronLeft,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ContactDetailClientProps {
@@ -40,36 +49,14 @@ interface ContactDetailClientProps {
   title: string;
 }
 
-type ContactWithDetails = Contact & {
-  addresses: {
-    type: string;
-    line1: string;
-    line2?: string | null;
-    city?: string | null;
-    state?: string | null;
-    postalCode?: string | null;
-    country?: string | null;
-    isDefault: boolean;
-  }[];
-  contactItems: {
-    id: string;
-    customCode?: string | null;
-    customName?: string | null;
-    agreedPrice: { toString: () => string };
-    discountPercent: { toString: () => string };
-    isAvailable: boolean;
-    item: {
-      id: string;
-      name: string;
-      sku?: string | null;
-      type: string;
-      unitOfMeasure: string;
-      unitPrice: { toString: () => string };
-      taxRateId: string | null;
-    };
-  }[];
-  documents?: Document[];
-};
+/** Outstanding balance is money: a decimal string plus its currency. */
+interface ContactBalance {
+  outstanding: string;
+  currency: string;
+  documentCount: number;
+}
+
+const DOCUMENTS_PAGE_SIZE = 10;
 
 export function ContactDetailClient({
   locale,
@@ -81,10 +68,9 @@ export function ContactDetailClient({
   title,
 }: ContactDetailClientProps) {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [contact, setContact] = React.useState<ContactWithDetails | null>(null);
-  const [balance, setBalance] = React.useState(0);
+  const [balance, setBalance] = React.useState<ContactBalance | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [showEditDialog, setShowEditDialog] = React.useState(false);
@@ -104,13 +90,15 @@ export function ContactDetailClient({
       const result = await getContactAction(contactId, tenantId);
       if (!result.success) {
         setServerError(result.error || "Failed to load contact");
-      } else if (result.data && result.data.contact) {
-        setContact(result.data.contact as ContactWithDetails);
-      } else {
-        setServerError("Failed to load contact");
+        return;
       }
-    } catch (err) {
-      setServerError("An unexpected error occurred");
+      if (result.data?.contact) {
+        setContact(result.data.contact);
+      } else {
+        setServerError("Contact not found");
+      }
+    } catch {
+      setServerError("Something went wrong while loading. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -120,44 +108,58 @@ export function ContactDetailClient({
     try {
       const result = await getContactBalanceAction(contactId, tenantId);
       if (result.success && result.data) {
-        setBalance(result.data.balance);
+        setBalance({
+          outstanding: result.data.outstanding,
+          currency: result.data.currency,
+          documentCount: result.data.documentCount,
+        });
       }
-    } catch (err) {
-      console.error("Failed to load balance", err);
+    } catch {
+      // The balance is derived from documents; its absence never blocks the
+      // contact record itself, so the history card simply shows "—".
+      setBalance(null);
     }
   }, [tenantId, contactId]);
 
   const fetchDocuments = React.useCallback(async () => {
     setIsDocLoading(true);
     try {
-      const { getDocumentsAction } = await import("@/server/actions/document");
       const result = await getDocumentsAction({
         tenantId,
         contactId,
         page: docPage,
-        pageSize: 10,
+        pageSize: DOCUMENTS_PAGE_SIZE,
         sortBy: "issuedAt",
         sortOrder: "desc",
       });
-      if (result.success && result.data) {
-        setContact((prev) => prev ? { ...prev, documents: result.data!.documents } : null);
-        setDocTotal(result.data.total);
-        setDocTotalPages(result.data.totalPages);
+      if (!result.success) {
+        setServerError(result.error || "Failed to load document history");
+        return;
       }
-    } catch (err) {
-      console.error("Failed to load documents", err);
+      const data = result.data;
+      if (!data) return;
+      // Local const: property narrowing does not survive inside the updater.
+      setContact((prev) =>
+        prev ? { ...prev, documents: data.documents } : prev,
+      );
+      setDocTotal(data.total);
+      setDocTotalPages(data.totalPages);
+    } catch {
+      setServerError(
+        "Something went wrong while loading documents. Please try again.",
+      );
     } finally {
       setIsDocLoading(false);
     }
   }, [tenantId, contactId, docPage]);
 
   React.useEffect(() => {
-    fetchContact();
-    fetchBalance();
+    void fetchContact();
+    void fetchBalance();
   }, [fetchContact, fetchBalance]);
 
   React.useEffect(() => {
-    fetchDocuments();
+    void fetchDocuments();
   }, [fetchDocuments]);
 
   const handleEdit = () => {
@@ -172,11 +174,11 @@ export function ContactDetailClient({
       const result = await archiveContactAction({ contactId, tenantId });
       if (!result.success) {
         setServerError(result.error || "Failed to archive contact");
-      } else {
-        router.refresh();
+        return;
       }
-    } catch (err) {
-      setServerError("An unexpected error occurred");
+      router.refresh();
+    } catch {
+      setServerError("Something went wrong while archiving. Please try again.");
     } finally {
       setArchiving(false);
     }
@@ -187,14 +189,14 @@ export function ContactDetailClient({
     setRestoring(true);
     setServerError(null);
     try {
-      const result = await restoreContactAction(contactId, tenantId);
+      const result = await restoreContactAction({ contactId, tenantId });
       if (!result.success) {
         setServerError(result.error || "Failed to restore contact");
-      } else {
-        router.refresh();
+        return;
       }
-    } catch (err) {
-      setServerError("An unexpected error occurred");
+      router.refresh();
+    } catch {
+      setServerError("Something went wrong while restoring. Please try again.");
     } finally {
       setRestoring(false);
     }
@@ -202,24 +204,27 @@ export function ContactDetailClient({
 
   const handleEditSuccess = () => {
     setShowEditDialog(false);
-    fetchContact();
-    fetchBalance();
+    void fetchContact();
+    void fetchBalance();
   };
 
   const getDisplayName = (c: ContactWithDetails) => {
     if (c.type === "BUSINESS") {
       return c.companyName || "—";
     }
-    return `${c.firstName || ""} ${c.lastName || ""}`.trim() || "—";
+    return `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "—";
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat(locale, { style: "currency", currency: "KES", minimumFractionDigits: 2 }).format(amount);
-  };
+  /** Decimal string in, formatted amount out — no `Number()` involved. */
+  const formatCurrency = (amount: string, currency = "KES") =>
+    formatMoney(amount, currency);
 
-  const formatDate = (date: Date | string) => {
-    return new Date(date).toLocaleDateString(locale, { year: "numeric", month: "short", day: "numeric" });
-  };
+  const formatDate = (date: Date | string) =>
+    new Date(date).toLocaleDateString(locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
 
   const getStatusBadge = (status: string) => {
     const tones: Record<string, BadgeTone> = {
@@ -245,7 +250,17 @@ export function ContactDetailClient({
     return (
       <div className="text-center py-12">
         <h2 className="text-xl font-semibold">Contact not found</h2>
-        <p className="text-muted-foreground mt-2">The contact may have been removed or you don't have access to it.</p>
+        <p className="text-muted-foreground mt-2">
+          The contact may have been removed or you do not have access to it.
+        </p>
+        <Button
+          variant="outline"
+          className="mt-4"
+          onClick={() => router.push(`/${locale}/app/contacts`)}
+        >
+          <ChevronLeft className="h-4 w-4 mr-2" />
+          Back to {title}
+        </Button>
       </div>
     );
   }
@@ -254,6 +269,16 @@ export function ContactDetailClient({
 
   return (
     <div className="space-y-6">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-2 text-muted-foreground"
+        onClick={() => router.push(`/${locale}/app/contacts`)}
+      >
+        <ChevronLeft className="h-4 w-4 mr-1" />
+        {title}
+      </Button>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex items-start gap-4">
@@ -261,8 +286,18 @@ export function ContactDetailClient({
             {contact.type === "BUSINESS" ? (
               <Package className="h-8 w-8 text-muted-foreground" />
             ) : (
-              <svg className="h-8 w-8 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              <svg
+                className="h-8 w-8 text-muted-foreground"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                />
               </svg>
             )}
           </div>
@@ -289,13 +324,21 @@ export function ContactDetailClient({
             </Button>
           )}
           {canDelete && contact.status === "ACTIVE" && (
-            <Button variant="outline" onClick={handleArchive} disabled={archiving}>
+            <Button
+              variant="outline"
+              onClick={handleArchive}
+              disabled={archiving}
+            >
               <Archive className="h-4 w-4 mr-2" />
               {archiving ? "Archiving..." : "Archive"}
             </Button>
           )}
           {canUpdate && contact.status === "ARCHIVED" && (
-            <Button variant="outline" onClick={handleRestore} disabled={restoring}>
+            <Button
+              variant="outline"
+              onClick={handleRestore}
+              disabled={restoring}
+            >
               <RotateCcw className="h-4 w-4 mr-2" />
               {restoring ? "Restoring..." : "Restore"}
             </Button>
@@ -304,7 +347,9 @@ export function ContactDetailClient({
       </div>
 
       {serverError && (
-        <div className="text-sm text-destructive" role="alert">{serverError}</div>
+        <div className="text-sm text-destructive" role="alert">
+          {serverError}
+        </div>
       )}
 
       {/* Balance Card */}
@@ -312,8 +357,21 @@ export function ContactDetailClient({
         <CardContent className="pt-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-muted-foreground">Outstanding Balance</p>
-              <p className="text-3xl font-semibold text-destructive">{formatCurrency(balance)}</p>
+              <p className="text-sm text-muted-foreground">
+                Outstanding Balance
+              </p>
+              <p className="text-3xl font-semibold text-destructive">
+                {balance
+                  ? formatCurrency(balance.outstanding, balance.currency)
+                  : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {balance
+                  ? `Across ${balance.documentCount} unpaid document${
+                      balance.documentCount === 1 ? "" : "s"
+                    }`
+                  : "Not available"}
+              </p>
             </div>
             <DollarSign className="h-12 w-12 text-destructive/20" />
           </div>
@@ -338,26 +396,36 @@ export function ContactDetailClient({
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Email</label>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Email
+                  </label>
                   <p>{contact.email || "—"}</p>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Phone</label>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Phone
+                  </label>
                   <p>{contact.phone || "—"}</p>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Mobile</label>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Mobile
+                  </label>
                   <p>{contact.mobile || "—"}</p>
                 </div>
                 {contact.taxPin && (
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Tax PIN</label>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      Tax PIN
+                    </label>
                     <p className="font-mono">{contact.taxPin}</p>
                   </div>
                 )}
                 {contact.notes && (
                   <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Notes</label>
+                    <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                      Notes
+                    </label>
                     <p className="whitespace-pre-wrap">{contact.notes}</p>
                   </div>
                 )}
@@ -375,20 +443,36 @@ export function ContactDetailClient({
                 ) : (
                   <div className="space-y-4">
                     {contact.addresses.map((addr, index) => (
-                      <div key={index} className="p-3 border border-border rounded-lg">
+                      <div
+                        key={index}
+                        className="p-3 border border-border rounded-lg"
+                      >
                         <div className="flex items-center justify-between mb-2">
-                          <span className={cn(
-                            "text-xs font-medium px-2 py-1 rounded-full",
-                            addr.type === "POSTAL" ? "bg-blue-100 text-blue-800" : "bg-green-100 text-green-800"
-                          )}>
+                          <span
+                            className={cn(
+                              "text-xs font-medium px-2 py-1 rounded-full",
+                              addr.type === "POSTAL"
+                                ? "bg-blue-100 text-blue-800"
+                                : "bg-green-100 text-green-800",
+                            )}
+                          >
                             {addr.type}
                           </span>
                           {addr.isDefault && (
-                            <Badge tone="neutral" className="text-xs border border-border bg-transparent">Default</Badge>
+                            <Badge
+                              tone="neutral"
+                              className="text-xs border border-border bg-transparent"
+                            >
+                              Default
+                            </Badge>
                           )}
                         </div>
                         <p className="text-sm">{addr.line1}</p>
-                        {addr.line2 && <p className="text-sm text-muted-foreground">{addr.line2}</p>}
+                        {addr.line2 && (
+                          <p className="text-sm text-muted-foreground">
+                            {addr.line2}
+                          </p>
+                        )}
                         <div className="flex flex-wrap gap-2 text-sm text-muted-foreground mt-1">
                           {addr.city && <span>{addr.city}</span>}
                           {addr.state && <span>{addr.state}</span>}
@@ -410,22 +494,30 @@ export function ContactDetailClient({
             </CardHeader>
             <CardContent className="grid gap-4 md:grid-cols-4 text-sm">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Created</label>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Created
+                </label>
                 <p>{formatDate(contact.createdAt)}</p>
               </div>
               <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Last Updated</label>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Last Updated
+                </label>
                 <p>{formatDate(contact.updatedAt)}</p>
               </div>
               {contact.archivedAt && (
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Archived</label>
+                  <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    Archived
+                  </label>
                   <p>{formatDate(contact.archivedAt)}</p>
                 </div>
               )}
               <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Catalogue Items</label>
-                <p>{contact.contactItems?.length || 0}</p>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Catalogue Items
+                </label>
+                <p>{contact.contactItems.length}</p>
               </div>
             </CardContent>
           </Card>
@@ -443,7 +535,7 @@ export function ContactDetailClient({
                     <TableHead className="text-right">Total</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Issued</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead className="text-right">Created</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -466,21 +558,21 @@ export function ContactDetailClient({
                   ) : (
                     contact.documents.map((doc) => (
                       <TableRow key={doc.id}>
-                        <TableCell className="font-mono font-medium">{doc.number}</TableCell>
+                        <TableCell className="font-mono font-medium">
+                          {doc.number}
+                        </TableCell>
                         <TableCell>
                           <Badge tone="neutral">{doc.type}</Badge>
                         </TableCell>
                         <TableCell className="font-mono text-right">
-                          {formatCurrency(Number(doc.total.toString()))}
+                          {formatCurrency(doc.total.toString(), doc.currency)}
                         </TableCell>
                         <TableCell>{getStatusBadge(doc.status)}</TableCell>
                         <TableCell className="text-muted-foreground">
                           {doc.issuedAt ? formatDate(doc.issuedAt) : "—"}
                         </TableCell>
-                        <TableCell className="text-right">
-                          <Button variant="ghost" size="icon" aria-label="View document">
-                            <Eye className="h-4 w-4" />
-                          </Button>
+                        <TableCell className="text-right text-muted-foreground text-sm">
+                          {formatDate(doc.createdAt)}
                         </TableCell>
                       </TableRow>
                     ))
@@ -497,7 +589,10 @@ export function ContactDetailClient({
                   onPageChange={setDocPage}
                 />
                 <p className="text-sm text-muted-foreground mt-2 text-center">
-                  Showing {((docPage - 1) * 10) + 1} to {Math.min(docPage * 10, docTotal)} of {docTotal} documents
+                  Showing{" "}
+                  {docTotal === 0 ? 0 : (docPage - 1) * DOCUMENTS_PAGE_SIZE + 1}{" "}
+                  to {Math.min(docPage * DOCUMENTS_PAGE_SIZE, docTotal)} of{" "}
+                  {docTotal} documents
                 </p>
               </div>
             )}
@@ -507,7 +602,6 @@ export function ContactDetailClient({
         {/* Customer Catalogue Tab */}
         <TabsContent value="catalogue">
           <ContactItemsClient
-            locale={locale}
             tenantId={tenantId}
             contactId={contactId}
             contactName={displayName}

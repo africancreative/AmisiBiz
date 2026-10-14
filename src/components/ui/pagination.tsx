@@ -11,7 +11,12 @@ interface PaginationProps {
   className?: string;
 }
 
-export function Pagination({ currentPage, totalPages, onPageChange, className }: PaginationProps) {
+export function Pagination({
+  currentPage,
+  totalPages,
+  onPageChange,
+  className,
+}: PaginationProps) {
   const pages = React.useMemo(() => {
     if (totalPages <= 1) return [];
     const result: (number | "ellipsis")[] = [];
@@ -28,7 +33,7 @@ export function Pagination({ currentPage, totalPages, onPageChange, className }:
 
     range(
       Math.max(2, currentPage - delta),
-      Math.min(totalPages - 1, currentPage + delta)
+      Math.min(totalPages - 1, currentPage + delta),
     );
 
     if (currentPage + delta < totalPages - 1) {
@@ -43,7 +48,10 @@ export function Pagination({ currentPage, totalPages, onPageChange, className }:
   if (pages.length === 0) return null;
 
   return (
-    <nav aria-label="Pagination" className={cn("flex items-center justify-center gap-1", className)}>
+    <nav
+      aria-label="Pagination"
+      className={cn("flex items-center justify-center gap-1", className)}
+    >
       <Button
         variant="outline"
         size="sm"
@@ -51,20 +59,33 @@ export function Pagination({ currentPage, totalPages, onPageChange, className }:
         disabled={currentPage === 1}
         aria-label="Previous page"
       >
-        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        <svg
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M15 19l-7-7 7-7"
+          />
         </svg>
       </Button>
 
       {pages.map((page, index) =>
         page === "ellipsis" ? (
-          <span key={`ellipsis-${index}`} className="px-2 text-muted-foreground">
+          <span
+            key={`ellipsis-${index}`}
+            className="px-2 text-muted-foreground"
+          >
             ...
           </span>
         ) : (
           <Button
             key={page}
-            variant={currentPage === page ? "default" : "outline"}
+            variant={currentPage === page ? "primary" : "outline"}
             size="sm"
             onClick={() => onPageChange(page)}
             aria-label={`Page ${page}`}
@@ -72,7 +93,7 @@ export function Pagination({ currentPage, totalPages, onPageChange, className }:
           >
             {page}
           </Button>
-        )
+        ),
       )}
 
       <Button
@@ -82,8 +103,18 @@ export function Pagination({ currentPage, totalPages, onPageChange, className }:
         disabled={currentPage === totalPages}
         aria-label="Next page"
       >
-        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        <svg
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M9 5l7 7-7 7"
+          />
         </svg>
       </Button>
     </nav>

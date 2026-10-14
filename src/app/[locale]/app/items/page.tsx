@@ -3,6 +3,7 @@ import { getWorkspaceState } from "@/server/auth/workspace";
 import { PERMISSIONS } from "@/lib/auth/permissions";
 import { tenantRoleHasPermission } from "@/lib/auth/permissions";
 import { AccessDenied } from "@/components/layout/access-denied";
+import { parsePageParam } from "@/lib/utils";
 import { ItemsClient } from "./items-client";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +31,9 @@ export default async function ItemsPage({
   }
 
   const resolvedSearchParams = await searchParams;
-  const page = parseInt(resolvedSearchParams.page || "1", 10);
+  // Query values are untrusted text; the page number is parsed into a bounded
+  // positive integer so `?page=abc` cannot reach Prisma as `skip: NaN`.
+  const page = parsePageParam(resolvedSearchParams.page);
   const search = resolvedSearchParams.search || "";
   const type = resolvedSearchParams.type || "";
   const status = resolvedSearchParams.status || "";
@@ -38,7 +41,6 @@ export default async function ItemsPage({
   const sortOrder = resolvedSearchParams.sortOrder || "desc";
 
   const t = await getTranslations("modules.items");
-  const tModules = await getTranslations("modules");
   const role = state.context.role;
 
   return (

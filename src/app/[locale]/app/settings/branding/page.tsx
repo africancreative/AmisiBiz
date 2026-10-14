@@ -13,7 +13,10 @@ export default async function BrandingPage({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
-  const state = await getWorkspaceState(locale, PERMISSIONS.BUSINESS_SETTINGS_READ);
+  const state = await getWorkspaceState(
+    locale,
+    PERMISSIONS.BUSINESS_SETTINGS_READ,
+  );
   if (state.status !== "ok") {
     return <AccessDenied />;
   }
@@ -23,7 +26,7 @@ export default async function BrandingPage({
   return (
     <div className="space-y-6">
       <PageHeader title={t("title")} description={t("description")} />
-      <BrandingForm tenantId={state.membership.tenantId} locale={locale} />
+      <BrandingForm tenantId={state.membership.tenantId} />
     </div>
   );
 }

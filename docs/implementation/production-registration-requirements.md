@@ -1,11 +1,13 @@
 # Production Registration Requirements
 
 ## Overview
+
 This document specifies the requirements that must be met before enabling public user registration in production.
 
 ## Required Infrastructure
 
 ### 1. Email Transport (MANDATORY)
+
 **Status: NOT IMPLEMENTED**
 
 The `lib/email/index.ts` currently has no transport implementation. Before enabling registration:
@@ -27,6 +29,7 @@ The `lib/email/index.ts` currently has no transport implementation. Before enabl
 - **Configure SPF/DKIM/DMARC** for the sending domain
 
 ### 2. Email Verification Enforcement (MANDATORY)
+
 **Status: CODE READY, REQUIRES EMAIL TRANSPORT**
 
 - Set `REQUIRE_EMAIL_VERIFICATION="true"` in production
@@ -34,24 +37,29 @@ The `lib/email/index.ts` currently has no transport implementation. Before enabl
 - Without verification, users cannot sign in
 
 ### 3. Rate Limiting - Distributed Store (MANDATORY)
+
 **Status: IMPLEMENTED - REQUIRES CONFIGURATION**
 
 The rate limiter supports Redis/Upstash. Configure one of:
 
 **Upstash (recommended for serverless):**
+
 ```
 UPSTASH_REDIS_REST_URL="https://your-instance.upstash.io"
 UPSTASH_REDIS_REST_TOKEN="your-token"
 ```
 
 **Standard Redis:**
+
 ```
 REDIS_URL="redis://user:pass@host:port"
 ```
+
 - Install `ioredis` (already added)
 - Test under load to verify limits hold across instances
 
 ### 4. Database Security (MANDATORY)
+
 **Status: MIGRATION READY - REQUIRES DEPLOYMENT**
 
 Apply the following to production database:
@@ -67,6 +75,7 @@ Apply the following to production database:
    - Policies enforce tenant isolation
 
 ### 5. Least-Privileged Database Role (MANDATORY)
+
 **Status: SCRIPT READY**
 
 - Do NOT use `postgres` superuser in production
@@ -77,6 +86,7 @@ Apply the following to production database:
   - Bypass RLS
 
 ### 6. Secure Session Configuration
+
 **Status: IMPLEMENTED**
 
 - `AUTH_SECRET` ≥ 32 bytes (generate: `openssl rand -base64 32`)
@@ -85,17 +95,21 @@ Apply the following to production database:
 - Session revocation on password change/role change
 
 ### 7. Hostname Routing Configuration
+
 **Status: CODE READY - REQUIRES CONFIGURATION**
 
 Set base domain for tenant subdomains:
+
 ```
 APP_BASE_DOMAIN="amisigenuine.com"
 NEXT_PUBLIC_APP_BASE_DOMAIN="amisigenuine.com"
 ```
+
 - Configure DNS wildcard: `*.amisigenuine.com → Vercel/load balancer`
 - Set `TRUST_PROXY="true"` behind known proxy/load balancer
 
 ### 8. Audit Log Protection
+
 **Status: IMPLEMENTED**
 
 - Audit logs are append-only (no DELETE/UPDATE paths exposed)
@@ -103,9 +117,11 @@ NEXT_PUBLIC_APP_BASE_DOMAIN="amisigenuine.com"
 - Platform admin access controlled via RLS
 
 ### 9. Error Monitoring & Alerting
+
 **Status: NOT CONFIGURED**
 
 Before production:
+
 - Configure error tracking (Sentry, Datadog, etc.)
 - Alert on:
   - Repeated auth failures (brute force)
@@ -114,6 +130,7 @@ Before production:
   - Database errors
 
 ### 10. Backup & Disaster Recovery
+
 **Status: NOT CONFIGURED**
 
 - Automated daily PostgreSQL backups (Supabase/Vercel Postgres provides this)
@@ -122,20 +139,20 @@ Before production:
 
 ## Deployment Checklist
 
-| Item | Required | Status |
-|------|----------|--------|
-| Email transport implemented | ✅ | ❌ |
-| `REQUIRE_EMAIL_VERIFICATION=true` | ✅ | ⏳ |
-| Upstash/Redis configured for rate limiting | ✅ | ⏳ |
-| RLS migration applied | ✅ | ⏳ |
-| App role created with strong password | ✅ | ⏳ |
-| `DATABASE_URL` uses app role | ✅ | ⏳ |
-| RLS policies active | ✅ | ⏳ |
-| `AUTH_SECRET` ≥ 32 bytes | ✅ | ⏳ |
-| `APP_BASE_DOMAIN` configured | ✅ | ⏳ |
-| DNS wildcard configured | ✅ | ⏳ |
-| Error tracking configured | ✅ | ⏳ |
-| Backup/DR verified | ✅ | ⏳ |
+| Item                                       | Required | Status |
+| ------------------------------------------ | -------- | ------ |
+| Email transport implemented                | ✅       | ❌     |
+| `REQUIRE_EMAIL_VERIFICATION=true`          | ✅       | ⏳     |
+| Upstash/Redis configured for rate limiting | ✅       | ⏳     |
+| RLS migration applied                      | ✅       | ⏳     |
+| App role created with strong password      | ✅       | ⏳     |
+| `DATABASE_URL` uses app role               | ✅       | ⏳     |
+| RLS policies active                        | ✅       | ⏳     |
+| `AUTH_SECRET` ≥ 32 bytes                   | ✅       | ⏳     |
+| `APP_BASE_DOMAIN` configured               | ✅       | ⏳     |
+| DNS wildcard configured                    | ✅       | ⏳     |
+| Error tracking configured                  | ✅       | ⏳     |
+| Backup/DR verified                         | ✅       | ⏳     |
 
 ## Enabling Registration
 

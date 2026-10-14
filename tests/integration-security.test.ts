@@ -25,11 +25,17 @@ describeIfDb("Database-backed security integration tests", () => {
     try {
       execSync("npx prisma migrate deploy", {
         cwd: process.cwd(),
-        env: { ...process.env, DATABASE_URL: TEST_DB_URL, DIRECT_URL: TEST_DB_URL },
+        env: {
+          ...process.env,
+          DATABASE_URL: TEST_DB_URL,
+          DIRECT_URL: TEST_DB_URL,
+        },
         stdio: "pipe",
       });
     } catch {
-      console.warn("Could not apply migrations to test DB, assuming schema exists");
+      console.warn(
+        "Could not apply migrations to test DB, assuming schema exists",
+      );
     }
 
     // Clean up test data
@@ -60,18 +66,38 @@ describeIfDb("Database-backed security integration tests", () => {
 
       // Create users
       const user1 = await prisma.user.create({
-        data: { email: "user1@test.com", name: "User 1", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user1@test.com",
+          name: "User 1",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
       const user2 = await prisma.user.create({
-        data: { email: "user2@test.com", name: "User 2", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user2@test.com",
+          name: "User 2",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       // Add user1 to tenant1, user2 to tenant2
       await prisma.tenantMember.create({
-        data: { tenantId: tenant1.id, userId: user1.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant1.id,
+          userId: user1.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
       await prisma.tenantMember.create({
-        data: { tenantId: tenant2.id, userId: user2.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant2.id,
+          userId: user2.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
 
       // user1 should only see tenant1 members
@@ -99,17 +125,37 @@ describeIfDb("Database-backed security integration tests", () => {
       });
 
       const user1 = await prisma.user.create({
-        data: { email: "user1@test.com", name: "User 1", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user1@test.com",
+          name: "User 1",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
       const user2 = await prisma.user.create({
-        data: { email: "user2@test.com", name: "User 2", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user2@test.com",
+          name: "User 2",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       await prisma.tenantMember.create({
-        data: { tenantId: tenant1.id, userId: user1.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant1.id,
+          userId: user1.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
       await prisma.tenantMember.create({
-        data: { tenantId: tenant2.id, userId: user2.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant2.id,
+          userId: user2.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
 
       // user1 creates invitation for tenant1 - should succeed
@@ -135,19 +181,35 @@ describeIfDb("Database-backed security integration tests", () => {
     it("suspended tenant members cannot access workspace", async () => {
       if (!prisma) return;
       const tenant = await prisma.tenant.create({
-        data: { name: "Suspended Tenant", slug: "suspended", status: "SUSPENDED" },
+        data: {
+          name: "Suspended Tenant",
+          slug: "suspended",
+          status: "SUSPENDED",
+        },
       });
 
       const user = await prisma.user.create({
-        data: { email: "user@test.com", name: "User", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user@test.com",
+          name: "User",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       await prisma.tenantMember.create({
-        data: { tenantId: tenant.id, userId: user.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant.id,
+          userId: user.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
 
       // Verify tenant is suspended
-      const foundTenant = await prisma.tenant.findUnique({ where: { id: tenant.id } });
+      const foundTenant = await prisma.tenant.findUnique({
+        where: { id: tenant.id },
+      });
       expect(foundTenant?.status).toBe("SUSPENDED");
 
       // Application authorization service should reject all operations
@@ -168,7 +230,9 @@ describeIfDb("Database-backed security integration tests", () => {
 
     it("RLS is enabled on protected tables", async () => {
       if (!prisma) return;
-      const result = await prisma.$queryRaw<{ tablename: string; rowsecurity: boolean }[]>`
+      const result = await prisma.$queryRaw<
+        { tablename: string; rowsecurity: boolean }[]
+      >`
         SELECT tablename, rowsecurity FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'public'
@@ -192,19 +256,34 @@ describeIfDb("Database-backed security integration tests", () => {
       });
 
       const user = await prisma.user.create({
-        data: { email: "user@test.com", name: "User", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user@test.com",
+          name: "User",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       // First default membership succeeds
       await prisma.tenantMember.create({
-        data: { tenantId: tenant1.id, userId: user.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant1.id,
+          userId: user.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
 
       // Second default membership should fail (partial unique index)
       await expect(
         prisma.tenantMember.create({
-          data: { tenantId: tenant2.id, userId: user.id, role: "BUSINESS_ADMIN", isDefault: true },
-        })
+          data: {
+            tenantId: tenant2.id,
+            userId: user.id,
+            role: "BUSINESS_ADMIN",
+            isDefault: true,
+          },
+        }),
       ).rejects.toThrow();
     });
 
@@ -218,16 +297,31 @@ describeIfDb("Database-backed security integration tests", () => {
       });
 
       const user = await prisma.user.create({
-        data: { email: "user@test.com", name: "User", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user@test.com",
+          name: "User",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       await prisma.tenantMember.create({
-        data: { tenantId: tenant1.id, userId: user.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant1.id,
+          userId: user.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
 
       // Second membership with isDefault=false should succeed
       const member2 = await prisma.tenantMember.create({
-        data: { tenantId: tenant2.id, userId: user.id, role: "BUSINESS_ADMIN", isDefault: false },
+        data: {
+          tenantId: tenant2.id,
+          userId: user.id,
+          role: "BUSINESS_ADMIN",
+          isDefault: false,
+        },
       });
 
       expect(member2.isDefault).toBe(false);
@@ -242,16 +336,29 @@ describeIfDb("Database-backed security integration tests", () => {
       });
 
       const user = await prisma.user.create({
-        data: { email: "user@test.com", name: "User", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user@test.com",
+          name: "User",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       await prisma.tenantMember.create({
-        data: { tenantId: tenant.id, userId: user.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant.id,
+          userId: user.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
 
       const rawToken = "test-token-123";
       const crypto = await import("crypto");
-      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const tokenHash = crypto
+        .createHash("sha256")
+        .update(rawToken)
+        .digest("hex");
 
       const invitation = await prisma.invitation.create({
         data: {
@@ -270,7 +377,9 @@ describeIfDb("Database-backed security integration tests", () => {
       expect(invitation.tokenHash).not.toBe(rawToken);
 
       // Verify lookup by hash works
-      const found = await prisma.invitation.findUnique({ where: { tokenHash } });
+      const found = await prisma.invitation.findUnique({
+        where: { tokenHash },
+      });
       expect(found).toBeDefined();
       expect(found?.email).toBe("invitee@test.com");
     });
@@ -284,20 +393,38 @@ describeIfDb("Database-backed security integration tests", () => {
       });
 
       const platformAdmin = await prisma.user.create({
-        data: { email: "admin@test.com", name: "Admin", password: "hash", status: "ACTIVE", platformRole: "PLATFORM_ADMIN" },
+        data: {
+          email: "admin@test.com",
+          name: "Admin",
+          password: "hash",
+          status: "ACTIVE",
+          platformRole: "PLATFORM_ADMIN",
+        },
       });
 
       const regularUser = await prisma.user.create({
-        data: { email: "user@test.com", name: "User", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user@test.com",
+          name: "User",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       await prisma.tenantMember.create({
-        data: { tenantId: tenant.id, userId: regularUser.id, role: "BUSINESS_OWNER", isDefault: true },
+        data: {
+          tenantId: tenant.id,
+          userId: regularUser.id,
+          role: "BUSINESS_OWNER",
+          isDefault: true,
+        },
       });
 
       // Platform admin has no tenant membership
       const adminMembership = await prisma.tenantMember.findUnique({
-        where: { tenantId_userId: { tenantId: tenant.id, userId: platformAdmin.id } },
+        where: {
+          tenantId_userId: { tenantId: tenant.id, userId: platformAdmin.id },
+        },
       });
       expect(adminMembership).toBeNull();
 
@@ -310,7 +437,13 @@ describeIfDb("Database-backed security integration tests", () => {
     it("incrementing sessionVersion invalidates sessions", async () => {
       if (!prisma) return;
       const user = await prisma.user.create({
-        data: { email: "user@test.com", name: "User", password: "hash", status: "ACTIVE", sessionVersion: 0 },
+        data: {
+          email: "user@test.com",
+          name: "User",
+          password: "hash",
+          status: "ACTIVE",
+          sessionVersion: 0,
+        },
       });
 
       // Simulate session token with version 0
@@ -326,7 +459,9 @@ describeIfDb("Database-backed security integration tests", () => {
       });
 
       // Fetch updated user
-      const updatedUser = await prisma.user.findUnique({ where: { id: user.id } });
+      const updatedUser = await prisma.user.findUnique({
+        where: { id: user.id },
+      });
       expect(updatedUser?.sessionVersion).toBe(1);
 
       // Old session version (0) should now be invalid
@@ -338,7 +473,12 @@ describeIfDb("Database-backed security integration tests", () => {
     it("records audit events for sensitive operations", async () => {
       if (!prisma) return;
       const user = await prisma.user.create({
-        data: { email: "user@test.com", name: "User", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user@test.com",
+          name: "User",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       const tenant = await prisma.tenant.create({
@@ -356,7 +496,9 @@ describeIfDb("Database-backed security integration tests", () => {
         },
       });
 
-      const logs = await prisma.auditLog.findMany({ where: { userId: user.id } });
+      const logs = await prisma.auditLog.findMany({
+        where: { userId: user.id },
+      });
       expect(logs).toHaveLength(1);
       expect(logs[0]!.action).toBe("auth.signIn");
     });
@@ -364,7 +506,12 @@ describeIfDb("Database-backed security integration tests", () => {
     it("does not store secrets in audit metadata", async () => {
       if (!prisma) return;
       const user = await prisma.user.create({
-        data: { email: "user@test.com", name: "User", password: "hash", status: "ACTIVE" },
+        data: {
+          email: "user@test.com",
+          name: "User",
+          password: "hash",
+          status: "ACTIVE",
+        },
       });
 
       await prisma.auditLog.create({
@@ -375,7 +522,9 @@ describeIfDb("Database-backed security integration tests", () => {
         },
       });
 
-      const log = await prisma.auditLog.findFirst({ where: { userId: user.id } });
+      const log = await prisma.auditLog.findFirst({
+        where: { userId: user.id },
+      });
       // The audit logger should sanitize sensitive keys
       // (This is enforced at the application level in lib/audit/index.ts)
       expect(log).toBeDefined();

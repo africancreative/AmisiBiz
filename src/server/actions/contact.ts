@@ -1,34 +1,121 @@
 "use server";
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/helpers";
 import { authorizeTenant } from "@/server/auth/authorization";
 import { PERMISSIONS } from "@/lib/auth/permissions";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
+import { fail, type ActionResult } from "@/lib/errors";
+import { authorizationFailure, invalidInput } from "@/server/actions/_shared";
 import {
   createContactSchema,
   updateContactSchema,
   archiveContactSchema,
+  restoreContactSchema,
+  contactLocatorSchema,
   contactQuerySchema,
-  type CreateContactInput,
-  type UpdateContactInput,
-  type ContactQueryInput,
 } from "@/lib/validations/contact";
-import type { Prisma } from "@prisma/client";
-import type { ActionResult } from "@/lib/errors";
 
-type ContactWithDetails = Prisma.ContactGetPayload<{
-  include: { addresses: true; contactItems: { include: { item: true } } };
+/**
+ * Detail projection for a single contact: addresses, its customer-specific
+ * catalogue (with the default item and that item's tax link) and its document
+ * history. Declared once so the returned Prisma payload and the action's return
+ * type can never disagree. Exported as a TYPE ONLY (erased at build time) so the
+ * detail screen renders the real shape instead of casting it.
+ */
+const contactDetailInclude = {
+  addresses: {
+    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+  },
+  contactItems: {
+    include: {
+      item: { include: { taxRate: { include: { category: true } } } },
+    },
+    orderBy: { createdAt: "desc" },
+  },
+  documents: {
+    orderBy: [{ issuedAt: "desc" }, { createdAt: "desc" }],
+    take: 50,
+    select: {
+      id: true,
+      type: true,
+      number: true,
+      status: true,
+      total: true,
+      currency: true,
+      issuedAt: true,
+      createdAt: true,
+    },
+  },
+} satisfies Prisma.ContactInclude;
+
+export type ContactWithDetails = Prisma.ContactGetPayload<{
+  include: typeof contactDetailInclude;
 }>;
 
-function authzError<T = void>(error: unknown): ActionResult<T> {
-  if (error instanceof Error && /not permitted|access/i.test(error.message)) {
-    return { success: false, error: error.message };
-  }
-  return {
-    success: false,
-    error: "You are not permitted to perform this action.",
+/**
+ * Tenant-scoped lookups always filter on BOTH the row id and the tenant id that
+ * was just authorized, so a forged id from another tenant reads as "not found"
+ * instead of leaking.
+ */
+async function findOwnedContact(contactId: string, tenantId: string) {
+  return prisma.contact.findFirst({
+    where: { id: contactId, tenantId },
+    select: { id: true, tenantId: true, email: true, status: true },
+  });
+}
+
+/** Map only the fields a contact update is allowed to change. */
+function toContactUpdateData(data: {
+  type?: "INDIVIDUAL" | "BUSINESS" | undefined;
+  firstName?: string | null | undefined;
+  lastName?: string | null | undefined;
+  companyName?: string | null | undefined;
+  email?: string | null | undefined;
+  phone?: string | null | undefined;
+  mobile?: string | null | undefined;
+  taxPin?: string | null | undefined;
+  notes?: string | null | undefined;
+}): Prisma.ContactUpdateInput {
+  // Every key is written explicitly. Nothing is spread or assigned from a
+  // computed key, so an unexpected property in the payload cannot reach Prisma.
+  const text = (value: string | null | undefined): string | null => {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : null;
   };
+
+  const update: Prisma.ContactUpdateInput = {};
+  if (data.type !== undefined) update.type = data.type;
+  if (data.firstName !== undefined) update.firstName = text(data.firstName);
+  if (data.lastName !== undefined) update.lastName = text(data.lastName);
+  if (data.companyName !== undefined)
+    update.companyName = text(data.companyName);
+  if (data.email !== undefined) update.email = text(data.email?.toLowerCase());
+  if (data.phone !== undefined) update.phone = text(data.phone);
+  if (data.mobile !== undefined) update.mobile = text(data.mobile);
+  if (data.taxPin !== undefined) update.taxPin = text(data.taxPin);
+  if (data.notes !== undefined) update.notes = text(data.notes);
+  return update;
+}
+
+function addressCreateData(
+  contactId: string,
+  addresses: NonNullable<
+    ReturnType<typeof createContactSchema.parse>["addresses"]
+  >,
+) {
+  return addresses.map((addr) => ({
+    contactId,
+    type: addr.type,
+    line1: addr.line1.trim(),
+    line2: addr.line2?.trim() || null,
+    city: addr.city?.trim() || null,
+    state: addr.state?.trim() || null,
+    postalCode: addr.postalCode?.trim() || null,
+    country: addr.country?.trim().toUpperCase() || null,
+    isDefault: addr.isDefault,
+  }));
 }
 
 export async function createContactAction(
@@ -36,36 +123,36 @@ export async function createContactAction(
 ): Promise<ActionResult<{ contactId: string }>> {
   const session = await requireAuth();
 
-  const result = createContactSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = createContactSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { tenantId, addresses, ...data } = result.data;
+  const { tenantId, addresses, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.CONTACTS_CREATE,
     );
   } catch (err) {
-    return authzError<{ contactId: string }>(err);
+    return authorizationFailure(err, "createContactAction");
   }
 
-  if (data.email) {
+  const email = data.email?.trim().toLowerCase() || null;
+
+  if (email) {
     const existing = await prisma.contact.findFirst({
-      where: { tenantId, email: data.email.toLowerCase() },
+      where: { tenantId, email },
       select: { id: true },
     });
     if (existing) {
       return {
         success: false,
         error: "A contact with this email already exists.",
+        code: "CONFLICT",
         fieldErrors: { email: ["Email already in use"] },
       };
     }
@@ -75,51 +162,49 @@ export async function createContactAction(
     const contact = await prisma.$transaction(async (tx) => {
       const created = await tx.contact.create({
         data: {
-          tenantId,
+          tenantId: context.tenantId,
           type: data.type,
           firstName: data.firstName?.trim() || null,
           lastName: data.lastName?.trim() || null,
           companyName: data.companyName?.trim() || null,
-          email: data.email?.toLowerCase().trim() || null,
+          email,
           phone: data.phone?.trim() || null,
           mobile: data.mobile?.trim() || null,
           taxPin: data.taxPin?.trim() || null,
           notes: data.notes?.trim() || null,
         },
+        select: {
+          id: true,
+          type: true,
+          companyName: true,
+          firstName: true,
+          lastName: true,
+        },
       });
 
       if (addresses && addresses.length > 0) {
         await tx.contactAddress.createMany({
-          data: addresses.map((addr) => ({
-            contactId: created.id,
-            type: addr.type,
-            line1: addr.line1,
-            line2: addr.line2 || null,
-            city: addr.city || null,
-            state: addr.state || null,
-            postalCode: addr.postalCode || null,
-            country: addr.country || null,
-            isDefault: addr.isDefault,
-          })),
+          data: addressCreateData(created.id, addresses),
         });
       }
 
       return created;
     });
 
+    // Audit deliberately omits contact PII (email, phone, postal address).
     await recordAudit({
-      action: "contact.created",
+      action: AUDIT_ACTIONS.CONTACT_CREATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "Contact",
       resourceId: contact.id,
-      metadata: { type: contact.type, email: contact.email, companyName: contact.companyName },
+      metadata: { type: contact.type },
     });
 
     return { success: true, data: { contactId: contact.id } };
   } catch (err) {
     console.error("[createContactAction]", err);
-    return { success: false, error: "Failed to create contact." };
+    return fail("Failed to create contact.", { code: "INTERNAL" });
   }
 }
 
@@ -128,99 +213,93 @@ export async function updateContactAction(
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
-  const result = updateContactSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = updateContactSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { contactId, tenantId, addresses, ...data } = result.data;
+  const { contactId, tenantId, addresses, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.CONTACTS_UPDATE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "updateContactAction");
   }
 
-  const existingContact = await prisma.contact.findUnique({
-    where: { id: contactId },
-    select: { id: true, tenantId: true, email: true },
-  });
+  const existingContact = await findOwnedContact(contactId, context.tenantId);
 
-  if (!existingContact || existingContact.tenantId !== tenantId) {
-    return { success: false, error: "Contact not found." };
+  if (!existingContact) {
+    return fail("Contact not found.", { code: "NOT_FOUND" });
   }
 
-  if (data.email && data.email.toLowerCase() !== existingContact.email?.toLowerCase()) {
+  const email =
+    data.email !== undefined
+      ? data.email.trim().toLowerCase() || null
+      : undefined;
+
+  if (email && email !== existingContact.email) {
     const emailExists = await prisma.contact.findFirst({
-      where: { tenantId, email: data.email.toLowerCase(), NOT: { id: contactId } },
+      where: { tenantId: context.tenantId, email, NOT: { id: contactId } },
       select: { id: true },
     });
     if (emailExists) {
       return {
         success: false,
         error: "A contact with this email already exists.",
+        code: "CONFLICT",
         fieldErrors: { email: ["Email already in use"] },
       };
     }
   }
 
-  const updateData: Prisma.ContactUpdateInput = {};
-  for (const [key, value] of Object.entries(data)) {
-    if (value !== undefined) {
-      if (typeof value === "string") {
-        updateData[key] = value.trim() || null;
-      } else {
-        updateData[key] = value;
-      }
-    }
-  }
+  const updateData = toContactUpdateData({ ...data, email });
 
   try {
     await prisma.$transaction(async (tx) => {
-      await tx.contact.update({
-        where: { id: contactId },
+      // The tenant predicate is part of the update itself: a row that moved
+      // tenants between the check and the write cannot be touched.
+      const result = await tx.contact.updateMany({
+        where: { id: contactId, tenantId: context.tenantId },
         data: updateData,
       });
+      if (result.count === 0) {
+        throw new Error("CONTACT_NOT_IN_TENANT");
+      }
 
       if (addresses && addresses.length > 0) {
-        await tx.contactAddress.deleteMany({ where: { contactId } });
+        await tx.contactAddress.deleteMany({
+          where: { contactId, contact: { tenantId: context.tenantId } },
+        });
         await tx.contactAddress.createMany({
-          data: addresses.map((addr) => ({
-            contactId,
-            type: addr.type,
-            line1: addr.line1,
-            line2: addr.line2 || null,
-            city: addr.city || null,
-            state: addr.state || null,
-            postalCode: addr.postalCode || null,
-            country: addr.country || null,
-            isDefault: addr.isDefault,
-          })),
+          data: addressCreateData(contactId, addresses),
         });
       }
     });
 
     await recordAudit({
-      action: "contact.updated",
+      action: AUDIT_ACTIONS.CONTACT_UPDATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "Contact",
       resourceId: contactId,
-      metadata: { fields: Object.keys(updateData), addressesUpdated: !!addresses },
+      metadata: {
+        fields: Object.keys(updateData),
+        addressesUpdated: Boolean(addresses && addresses.length > 0),
+      },
     });
 
     return { success: true };
   } catch (err) {
+    if (err instanceof Error && err.message === "CONTACT_NOT_IN_TENANT") {
+      return fail("Contact not found.", { code: "NOT_FOUND" });
+    }
     console.error("[updateContactAction]", err);
-    return { success: false, error: "Failed to update contact." };
+    return fail("Failed to update contact.", { code: "INTERNAL" });
   }
 }
 
@@ -229,100 +308,114 @@ export async function archiveContactAction(
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
-  const result = archiveContactSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = archiveContactSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { contactId, tenantId } = result.data;
+  const { contactId, tenantId } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.CONTACTS_DELETE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "archiveContactAction");
   }
 
-  const existingContact = await prisma.contact.findUnique({
-    where: { id: contactId },
-    select: { id: true, tenantId: true, status: true },
-  });
+  const existingContact = await findOwnedContact(contactId, context.tenantId);
 
-  if (!existingContact || existingContact.tenantId !== tenantId) {
-    return { success: false, error: "Contact not found." };
+  if (!existingContact) {
+    return fail("Contact not found.", { code: "NOT_FOUND" });
   }
 
   if (existingContact.status === "ARCHIVED") {
-    return { success: false, error: "Contact is already archived." };
+    return fail("Contact is already archived.", { code: "CONFLICT" });
   }
 
   try {
-    await prisma.contact.update({
-      where: { id: contactId },
+    // Soft delete only. Issued documents keep pointing at this contact, so the
+    // historical record is preserved rather than cascade-destroyed.
+    const result = await prisma.contact.updateMany({
+      where: { id: contactId, tenantId: context.tenantId, status: "ACTIVE" },
       data: { status: "ARCHIVED", archivedAt: new Date() },
     });
 
+    if (result.count === 0) {
+      return fail("Contact is already archived.", { code: "CONFLICT" });
+    }
+
+    const linkedDocuments = await prisma.document.count({
+      where: { contactId, tenantId: context.tenantId },
+    });
+
     await recordAudit({
-      action: "contact.archived",
+      action: AUDIT_ACTIONS.CONTACT_ARCHIVED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "Contact",
       resourceId: contactId,
+      metadata: { linkedDocuments },
     });
 
     return { success: true };
   } catch (err) {
     console.error("[archiveContactAction]", err);
-    return { success: false, error: "Failed to archive contact." };
+    return fail("Failed to archive contact.", { code: "INTERNAL" });
   }
 }
 
 export async function restoreContactAction(
-  contactId: string,
-  tenantId: string,
+  rawInput: unknown,
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
+  // Same shape as `archiveContactAction`: the client never gets to name the
+  // field it wants flipped, only the locator.
+  const parsed = restoreContactSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+  const { contactId, tenantId } = parsed.data;
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.CONTACTS_UPDATE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "restoreContactAction");
   }
 
-  const existingContact = await prisma.contact.findUnique({
-    where: { id: contactId },
-    select: { id: true, tenantId: true, status: true },
-  });
+  const existingContact = await findOwnedContact(contactId, context.tenantId);
 
-  if (!existingContact || existingContact.tenantId !== tenantId) {
-    return { success: false, error: "Contact not found." };
+  if (!existingContact) {
+    return fail("Contact not found.", { code: "NOT_FOUND" });
   }
 
   if (existingContact.status === "ACTIVE") {
-    return { success: false, error: "Contact is already active." };
+    return fail("Contact is already active.", { code: "CONFLICT" });
   }
 
   try {
-    await prisma.contact.update({
-      where: { id: contactId },
+    const result = await prisma.contact.updateMany({
+      where: { id: contactId, tenantId: context.tenantId, status: "ARCHIVED" },
       data: { status: "ACTIVE", archivedAt: null },
     });
 
+    if (result.count === 0) {
+      return fail("Contact is already active.", { code: "CONFLICT" });
+    }
+
     await recordAudit({
-      action: "contact.restored",
+      action: AUDIT_ACTIONS.CONTACT_RESTORED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "Contact",
       resourceId: contactId,
     });
@@ -330,55 +423,56 @@ export async function restoreContactAction(
     return { success: true };
   } catch (err) {
     console.error("[restoreContactAction]", err);
-    return { success: false, error: "Failed to restore contact." };
+    return fail("Failed to restore contact.", { code: "INTERNAL" });
   }
 }
 
-export async function getContactsAction(
-  rawInput: unknown,
-): Promise<ActionResult<{
-  contacts: Prisma.ContactGetPayload<{ include: { addresses: true } }>[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}>> {
+export async function getContactsAction(rawInput: unknown): Promise<
+  ActionResult<{
+    contacts: Prisma.ContactGetPayload<{ include: { addresses: true } }>[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  }>
+> {
   const session = await requireAuth();
 
-  const result = contactQuerySchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid query parameters.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = contactQuerySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid query parameters.");
   }
 
-  const { tenantId, search, type, status, page, pageSize, sortBy, sortOrder } = result.data;
+  const { tenantId, search, type, status, page, pageSize, sortBy, sortOrder } =
+    parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.CONTACTS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getContactsAction");
   }
 
   const where: Prisma.ContactWhereInput = {
-    tenantId,
-    ...(type && { type }),
-    ...(status && { status }),
-    ...(search && {
-      OR: [
-        { firstName: { contains: search, mode: "insensitive" } },
-        { lastName: { contains: search, mode: "insensitive" } },
-        { companyName: { contains: search, mode: "insensitive" } },
-        { email: { contains: search, mode: "insensitive" } },
-        { phone: { contains: search, mode: "insensitive" } },
-      ],
-    }),
+    tenantId: context.tenantId,
+    ...(type ? { type } : {}),
+    ...(status ? { status } : {}),
+    ...(search
+      ? {
+          OR: [
+            { firstName: { contains: search, mode: "insensitive" } },
+            { lastName: { contains: search, mode: "insensitive" } },
+            { companyName: { contains: search, mode: "insensitive" } },
+            { email: { contains: search, mode: "insensitive" } },
+            { phone: { contains: search, mode: "insensitive" } },
+            { mobile: { contains: search, mode: "insensitive" } },
+          ],
+        }
+      : {}),
   };
 
   try {
@@ -386,6 +480,7 @@ export async function getContactsAction(
       prisma.contact.findMany({
         where,
         include: { addresses: true },
+        // sortBy is constrained by the zod enum above — never free text.
         orderBy: { [sortBy]: sortOrder },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -400,12 +495,12 @@ export async function getContactsAction(
         total,
         page,
         pageSize,
-        totalPages: Math.ceil(total / pageSize),
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
       },
     };
   } catch (err) {
     console.error("[getContactsAction]", err);
-    return { success: false, error: "Failed to load contacts." };
+    return fail("Failed to load contacts.", { code: "INTERNAL" });
   }
 }
 
@@ -415,70 +510,116 @@ export async function getContactAction(
 ): Promise<ActionResult<{ contact: ContactWithDetails | null }>> {
   const session = await requireAuth();
 
+  const parsed = contactLocatorSchema.safeParse({ contactId, tenantId });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+  const scoped = parsed.data;
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
-      tenantId,
+      scoped.tenantId,
       PERMISSIONS.CONTACTS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getContactAction");
   }
 
   try {
     const contact = await prisma.contact.findFirst({
-      where: { id: contactId, tenantId },
-      include: {
-        addresses: true,
-        contactItems: {
-          include: { item: true },
-          orderBy: { createdAt: "desc" },
-        },
-      },
+      where: { id: scoped.contactId, tenantId: context.tenantId },
+      include: contactDetailInclude,
     });
 
     return { success: true, data: { contact } };
   } catch (err) {
     console.error("[getContactAction]", err);
-    return { success: false, error: "Failed to load contact." };
+    return fail("Failed to load contact.", { code: "INTERNAL" });
   }
 }
 
+/**
+ * Outstanding balance derived from recorded documents.
+ *
+ * The sum comes back from PostgreSQL as `Decimal` and is returned as a decimal
+ * STRING. The figure is the total of documents in an unsettled status; payment
+ * application is a Phase 06 concern, so this is the "amount invoiced and not
+ * voided/drafted" summary, labelled as such by the caller.
+ */
 export async function getContactBalanceAction(
   contactId: string,
   tenantId: string,
-): Promise<ActionResult<{ balance: number }>> {
+): Promise<
+  ActionResult<{ outstanding: string; currency: string; documentCount: number }>
+> {
   const session = await requireAuth();
 
+  const parsed = contactLocatorSchema.safeParse({ contactId, tenantId });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.CONTACTS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getContactBalanceAction");
   }
 
-  const contact = await prisma.contact.findUnique({
-    where: { id: contactId },
-    select: { id: true, tenantId: true },
-  });
-
-  if (!contact || contact.tenantId !== tenantId) {
-    return { success: false, error: "Contact not found." };
+  const contact = await findOwnedContact(contactId, context.tenantId);
+  if (!contact) {
+    return fail("Contact not found.", { code: "NOT_FOUND" });
   }
 
-  const result = await prisma.document.aggregate({
-    where: {
-      tenantId,
-      contactId,
-      status: { in: ["ISSUED", "OVERDUE", "PARTIALLY_PAID"] },
-    },
-    _sum: { total: true },
-  });
+  const OUTSTANDING_STATUSES = ["ISSUED", "OVERDUE", "PARTIALLY_PAID"];
 
-  const balance = result._sum.total ? Number(result._sum.total) : 0;
+  try {
+    const [aggregate, documentCount, branding, tenant] = await Promise.all([
+      prisma.document.aggregate({
+        where: {
+          tenantId: context.tenantId,
+          contactId,
+          status: { in: OUTSTANDING_STATUSES },
+        },
+        _sum: { total: true },
+      }),
+      prisma.document.count({
+        where: {
+          tenantId: context.tenantId,
+          contactId,
+          status: { in: OUTSTANDING_STATUSES },
+        },
+      }),
+      prisma.tenantBranding.findUnique({
+        where: { tenantId: context.tenantId },
+        select: { currency: true },
+      }),
+      prisma.tenant.findUnique({
+        where: { id: context.tenantId },
+        select: { currency: true },
+      }),
+    ]);
 
-  return { success: true, data: { balance } };
+    const outstanding = (
+      aggregate._sum.total ?? new Prisma.Decimal(0)
+    ).toFixed();
+
+    return {
+      success: true,
+      data: {
+        outstanding,
+        currency: branding?.currency || tenant?.currency || "KES",
+        documentCount,
+      },
+    };
+  } catch (err) {
+    console.error("[getContactBalanceAction]", err);
+    return fail("Failed to load balance.", { code: "INTERNAL" });
+  }
 }

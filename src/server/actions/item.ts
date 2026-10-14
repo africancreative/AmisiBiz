@@ -1,39 +1,83 @@
 "use server";
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/helpers";
 import { authorizeTenant } from "@/server/auth/authorization";
 import { PERMISSIONS } from "@/lib/auth/permissions";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
+import { fail, type ActionResult } from "@/lib/errors";
+import { authorizationFailure, invalidInput } from "@/server/actions/_shared";
 import {
   createTaxCategorySchema,
   updateTaxCategorySchema,
+  taxCategoryLocatorSchema,
   taxCategoryQuerySchema,
   createItemSchema,
   updateItemSchema,
+  itemLocatorSchema,
   itemQuerySchema,
-  type CreateTaxCategoryInput,
-  type UpdateTaxCategoryInput,
-  type CreateItemInput,
-  type UpdateItemInput,
-  type TaxCategoryQueryInput,
-  type ItemQueryInput,
 } from "@/lib/validations/item";
-import type { Prisma } from "@prisma/client";
-import type { ActionResult } from "@/lib/errors";
 
-type ItemWithDetails = Prisma.ItemGetPayload<{
-  include: { taxRate: { include: { category: true } }; contactItems: { include: { contact: true } } };
-}>;
+const itemInclude = {
+  taxRate: { include: { category: true } },
+  contactItems: {
+    include: {
+      contact: {
+        select: {
+          id: true,
+          type: true,
+          firstName: true,
+          lastName: true,
+          companyName: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" as const },
+  },
+} satisfies Prisma.ItemInclude;
 
-function authzError<T = void>(error: unknown): ActionResult<T> {
-  if (error instanceof Error && /not permitted|access/i.test(error.message)) {
-    return { success: false, error: error.message };
+type ItemWithDetails = Prisma.ItemGetPayload<{ include: typeof itemInclude }>;
+
+/** Explicit, field-by-field update mapping — never a computed key. */
+function toItemUpdateData(data: {
+  type?: "PRODUCT" | "SERVICE" | undefined;
+  status?: "ACTIVE" | "INACTIVE" | undefined;
+  name?: string | undefined;
+  sku?: string | null | undefined;
+  description?: string | null | undefined;
+  unitOfMeasure?: string | undefined;
+  unitPrice?: string | undefined;
+  currency?: string | undefined;
+  taxRateId?: string | null | undefined;
+  notes?: string | null | undefined;
+}): Prisma.ItemUpdateInput {
+  const text = (value: string | null | undefined): string | null =>
+    value?.trim() ? value.trim() : null;
+
+  const update: Prisma.ItemUpdateInput = {};
+  if (data.type !== undefined) update.type = data.type;
+  if (data.status !== undefined) update.status = data.status;
+  if (data.name !== undefined) update.name = data.name.trim();
+  if (data.sku !== undefined) update.sku = text(data.sku);
+  if (data.description !== undefined)
+    update.description = text(data.description);
+  if (data.unitOfMeasure !== undefined)
+    update.unitOfMeasure = data.unitOfMeasure;
+  // Decimal from a validated decimal STRING — never binary float arithmetic.
+  if (data.unitPrice !== undefined)
+    update.unitPrice = new Prisma.Decimal(data.unitPrice);
+  if (data.currency !== undefined) update.currency = data.currency;
+  // The relation form is used instead of the raw FK scalar: every caller has
+  // already proven the rate belongs to the authorized tenant, so `connect`
+  // cannot reach another business's tax configuration.
+  if (data.taxRateId !== undefined) {
+    update.taxRate = data.taxRateId
+      ? { connect: { id: data.taxRateId } }
+      : { disconnect: true };
   }
-  return {
-    success: false,
-    error: "You are not permitted to perform this action.",
-  };
+  if (data.notes !== undefined) update.notes = text(data.notes);
+  return update;
 }
 
 export async function createTaxCategoryAction(
@@ -41,35 +85,33 @@ export async function createTaxCategoryAction(
 ): Promise<ActionResult<{ categoryId: string }>> {
   const session = await requireAuth();
 
-  const result = createTaxCategorySchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = createTaxCategorySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { tenantId, rates, ...data } = result.data;
+  const { tenantId, rates, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_CREATE,
     );
   } catch (err) {
-    return authzError<{ categoryId: string }>(err);
+    return authorizationFailure(err, "createTaxCategoryAction");
   }
 
   const existing = await prisma.taxCategory.findFirst({
-    where: { tenantId, name: data.name },
+    where: { tenantId: context.tenantId, name: data.name },
     select: { id: true },
   });
   if (existing) {
     return {
       success: false,
       error: "A tax category with this name already exists.",
+      code: "CONFLICT",
       fieldErrors: { name: ["Name already in use"] },
     };
   }
@@ -78,27 +120,34 @@ export async function createTaxCategoryAction(
     const category = await prisma.$transaction(async (tx) => {
       const created = await tx.taxCategory.create({
         data: {
-          tenantId,
+          tenantId: context.tenantId,
           name: data.name,
           description: data.description?.trim() || null,
           isDefault: data.isDefault,
         },
+        select: { id: true, name: true },
       });
 
       if (data.isDefault) {
         await tx.taxCategory.updateMany({
-          where: { tenantId, id: { not: created.id }, isDefault: true },
+          where: {
+            tenantId: context.tenantId,
+            id: { not: created.id },
+            isDefault: true,
+          },
           data: { isDefault: false },
         });
       }
 
       await tx.taxRate.createMany({
         data: rates.map((rate) => ({
-          tenantId,
+          tenantId: context.tenantId,
           categoryId: created.id,
-          name: rate.name,
+          name: rate.name.trim(),
           rate: new Prisma.Decimal(rate.rate),
-          effectiveFrom: rate.effectiveFrom ? new Date(rate.effectiveFrom) : new Date(),
+          effectiveFrom: rate.effectiveFrom
+            ? new Date(rate.effectiveFrom)
+            : new Date(),
           effectiveTo: rate.effectiveTo ? new Date(rate.effectiveTo) : null,
           isActive: rate.isActive,
         })),
@@ -108,9 +157,9 @@ export async function createTaxCategoryAction(
     });
 
     await recordAudit({
-      action: "taxCategory.created",
+      action: AUDIT_ACTIONS.TAX_CATEGORY_CREATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "TaxCategory",
       resourceId: category.id,
       metadata: { name: category.name, rateCount: rates.length },
@@ -119,7 +168,7 @@ export async function createTaxCategoryAction(
     return { success: true, data: { categoryId: category.id } };
   } catch (err) {
     console.error("[createTaxCategoryAction]", err);
-    return { success: false, error: "Failed to create tax category." };
+    return fail("Failed to create tax category.", { code: "INTERNAL" });
   }
 }
 
@@ -128,80 +177,83 @@ export async function updateTaxCategoryAction(
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
-  const result = updateTaxCategorySchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = updateTaxCategorySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { tenantId, categoryId, ...data } = result.data;
+  const { tenantId, categoryId, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_UPDATE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "updateTaxCategoryAction");
   }
 
-  const existing = await prisma.taxCategory.findUnique({
-    where: { id: categoryId },
-    select: { id: true, tenantId: true, name: true },
+  const existing = await prisma.taxCategory.findFirst({
+    where: { id: categoryId, tenantId: context.tenantId },
+    select: { id: true, name: true },
   });
 
-  if (!existing || existing.tenantId !== tenantId) {
-    return { success: false, error: "Tax category not found." };
+  if (!existing) {
+    return fail("Tax category not found.", { code: "NOT_FOUND" });
   }
 
   if (data.name && data.name !== existing.name) {
     const nameExists = await prisma.taxCategory.findFirst({
-      where: { tenantId, name: data.name, NOT: { id: categoryId } },
+      where: {
+        tenantId: context.tenantId,
+        name: data.name,
+        NOT: { id: categoryId },
+      },
       select: { id: true },
     });
     if (nameExists) {
       return {
         success: false,
         error: "A tax category with this name already exists.",
+        code: "CONFLICT",
         fieldErrors: { name: ["Name already in use"] },
       };
     }
   }
 
   const updateData: Prisma.TaxCategoryUpdateInput = {};
-  for (const [key, value] of Object.entries(data)) {
-    if (value !== undefined) {
-      if (typeof value === "string") {
-        updateData[key] = value.trim() || null;
-      } else {
-        updateData[key] = value;
-      }
-    }
+  if (data.name !== undefined) updateData.name = data.name.trim();
+  if (data.description !== undefined) {
+    updateData.description = data.description.trim() || null;
   }
+  if (data.isDefault !== undefined) updateData.isDefault = data.isDefault;
 
   try {
     await prisma.$transaction(async (tx) => {
-      await tx.taxCategory.update({
-        where: { id: categoryId },
+      const result = await tx.taxCategory.updateMany({
+        where: { id: categoryId, tenantId: context.tenantId },
         data: updateData,
       });
+      if (result.count === 0) throw new Error("ROW_NOT_IN_TENANT");
 
       if (data.isDefault) {
         await tx.taxCategory.updateMany({
-          where: { tenantId, id: { not: categoryId }, isDefault: true },
+          where: {
+            tenantId: context.tenantId,
+            id: { not: categoryId },
+            isDefault: true,
+          },
           data: { isDefault: false },
         });
       }
     });
 
     await recordAudit({
-      action: "taxCategory.updated",
+      action: AUDIT_ACTIONS.TAX_CATEGORY_UPDATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "TaxCategory",
       resourceId: categoryId,
       metadata: { fields: Object.keys(updateData) },
@@ -209,47 +261,47 @@ export async function updateTaxCategoryAction(
 
     return { success: true };
   } catch (err) {
+    if (err instanceof Error && err.message === "ROW_NOT_IN_TENANT") {
+      return fail("Tax category not found.", { code: "NOT_FOUND" });
+    }
     console.error("[updateTaxCategoryAction]", err);
-    return { success: false, error: "Failed to update tax category." };
+    return fail("Failed to update tax category.", { code: "INTERNAL" });
   }
 }
 
-export async function getTaxCategoriesAction(
-  rawInput: unknown,
-): Promise<ActionResult<{
-  categories: Prisma.TaxCategoryGetPayload<{ include: { rates: true } }>[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}>> {
+export async function getTaxCategoriesAction(rawInput: unknown): Promise<
+  ActionResult<{
+    categories: Prisma.TaxCategoryGetPayload<{ include: { rates: true } }>[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  }>
+> {
   const session = await requireAuth();
 
-  const result = taxCategoryQuerySchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid query parameters.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = taxCategoryQuerySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid query parameters.");
   }
 
-  const { tenantId, page, pageSize } = result.data;
+  const { tenantId, page, pageSize } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getTaxCategoriesAction");
   }
 
   try {
     const [categories, total] = await Promise.all([
       prisma.taxCategory.findMany({
-        where: { tenantId },
+        where: { tenantId: context.tenantId },
         include: {
           rates: {
             where: { isActive: true },
@@ -260,7 +312,7 @@ export async function getTaxCategoriesAction(
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
-      prisma.taxCategory.count({ where: { tenantId } }),
+      prisma.taxCategory.count({ where: { tenantId: context.tenantId } }),
     ]);
 
     return {
@@ -270,41 +322,51 @@ export async function getTaxCategoriesAction(
         total,
         page,
         pageSize,
-        totalPages: Math.ceil(total / pageSize),
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
       },
     };
   } catch (err) {
     console.error("[getTaxCategoriesAction]", err);
-    return { success: false, error: "Failed to load tax categories." };
+    return fail("Failed to load tax categories.", { code: "INTERNAL" });
   }
 }
 
 export async function getTaxCategoryAction(
   categoryId: string,
   tenantId: string,
-): Promise<ActionResult<{ category: Prisma.TaxCategoryGetPayload<{ include: { rates: true } }> | null }>> {
+): Promise<
+  ActionResult<{
+    category: Prisma.TaxCategoryGetPayload<{ include: { rates: true } }> | null;
+  }>
+> {
   const session = await requireAuth();
 
+  const parsed = taxCategoryLocatorSchema.safeParse({ categoryId, tenantId });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getTaxCategoryAction");
   }
 
   try {
     const category = await prisma.taxCategory.findFirst({
-      where: { id: categoryId, tenantId },
+      where: { id: categoryId, tenantId: context.tenantId },
       include: { rates: { orderBy: { effectiveFrom: "desc" } } },
     });
 
     return { success: true, data: { category } };
   } catch (err) {
     console.error("[getTaxCategoryAction]", err);
-    return { success: false, error: "Failed to load tax category." };
+    return fail("Failed to load tax category.", { code: "INTERNAL" });
   }
 }
 
@@ -313,50 +375,53 @@ export async function createItemAction(
 ): Promise<ActionResult<{ itemId: string }>> {
   const session = await requireAuth();
 
-  const result = createItemSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = createItemSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { tenantId, ...data } = result.data;
+  const { tenantId, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_CREATE,
     );
   } catch (err) {
-    return authzError<{ itemId: string }>(err);
+    return authorizationFailure(err, "createItemAction");
   }
 
-  if (data.sku) {
+  const sku = data.sku?.trim() || null;
+
+  if (sku) {
     const existing = await prisma.item.findFirst({
-      where: { tenantId, sku: data.sku },
+      where: { tenantId: context.tenantId, sku },
       select: { id: true },
     });
     if (existing) {
       return {
         success: false,
         error: "An item with this SKU already exists.",
+        code: "CONFLICT",
         fieldErrors: { sku: ["SKU already in use"] },
       };
     }
   }
 
+  // A tax rate is only usable when it belongs to this tenant — never to the
+  // rate of another business.
   if (data.taxRateId) {
     const taxRate = await prisma.taxRate.findFirst({
-      where: { id: data.taxRateId, tenantId },
+      where: { id: data.taxRateId, tenantId: context.tenantId },
       select: { id: true },
     });
     if (!taxRate) {
       return {
         success: false,
         error: "Invalid tax rate.",
+        code: "VALIDATION_ERROR",
         fieldErrors: { taxRateId: ["Tax rate not found"] },
       };
     }
@@ -365,11 +430,11 @@ export async function createItemAction(
   try {
     const item = await prisma.item.create({
       data: {
-        tenantId,
+        tenantId: context.tenantId,
         type: data.type,
         status: data.status,
         name: data.name.trim(),
-        sku: data.sku?.trim() || null,
+        sku,
         description: data.description?.trim() || null,
         unitOfMeasure: data.unitOfMeasure,
         unitPrice: new Prisma.Decimal(data.unitPrice),
@@ -377,12 +442,13 @@ export async function createItemAction(
         taxRateId: data.taxRateId || null,
         notes: data.notes?.trim() || null,
       },
+      select: { id: true, name: true, type: true, sku: true },
     });
 
     await recordAudit({
-      action: "item.created",
+      action: AUDIT_ACTIONS.ITEM_CREATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "Item",
       resourceId: item.id,
       metadata: { name: item.name, type: item.type, sku: item.sku },
@@ -391,7 +457,7 @@ export async function createItemAction(
     return { success: true, data: { itemId: item.id } };
   } catch (err) {
     console.error("[createItemAction]", err);
-    return { success: false, error: "Failed to create item." };
+    return fail("Failed to create item.", { code: "INTERNAL" });
   }
 }
 
@@ -400,45 +466,45 @@ export async function updateItemAction(
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
-  const result = updateItemSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = updateItemSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { itemId, tenantId, ...data } = result.data;
+  const { itemId, tenantId, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_UPDATE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "updateItemAction");
   }
 
-  const existingItem = await prisma.item.findUnique({
-    where: { id: itemId },
-    select: { id: true, tenantId: true, sku: true },
+  const existingItem = await prisma.item.findFirst({
+    where: { id: itemId, tenantId: context.tenantId },
+    select: { id: true, sku: true },
   });
 
-  if (!existingItem || existingItem.tenantId !== tenantId) {
-    return { success: false, error: "Item not found." };
+  if (!existingItem) {
+    return fail("Item not found.", { code: "NOT_FOUND" });
   }
 
-  if (data.sku && data.sku !== existingItem.sku) {
+  const sku = data.sku !== undefined ? data.sku.trim() || null : undefined;
+
+  if (sku && sku !== existingItem.sku) {
     const skuExists = await prisma.item.findFirst({
-      where: { tenantId, sku: data.sku, NOT: { id: itemId } },
+      where: { tenantId: context.tenantId, sku, NOT: { id: itemId } },
       select: { id: true },
     });
     if (skuExists) {
       return {
         success: false,
         error: "An item with this SKU already exists.",
+        code: "CONFLICT",
         fieldErrors: { sku: ["SKU already in use"] },
       };
     }
@@ -446,41 +512,35 @@ export async function updateItemAction(
 
   if (data.taxRateId) {
     const taxRate = await prisma.taxRate.findFirst({
-      where: { id: data.taxRateId, tenantId },
+      where: { id: data.taxRateId, tenantId: context.tenantId },
       select: { id: true },
     });
     if (!taxRate) {
       return {
         success: false,
         error: "Invalid tax rate.",
+        code: "VALIDATION_ERROR",
         fieldErrors: { taxRateId: ["Tax rate not found"] },
       };
     }
   }
 
-  const updateData: Prisma.ItemUpdateInput = {};
-  for (const [key, value] of Object.entries(data)) {
-    if (value !== undefined) {
-      if (typeof value === "string" && key !== "unitPrice") {
-        updateData[key] = value.trim() || null;
-      } else if (key === "unitPrice") {
-        updateData[key] = new Prisma.Decimal(value);
-      } else {
-        updateData[key] = value;
-      }
-    }
-  }
+  const updateData = toItemUpdateData({ ...data, sku });
 
   try {
-    await prisma.item.update({
-      where: { id: itemId },
+    const result = await prisma.item.updateMany({
+      where: { id: itemId, tenantId: context.tenantId },
       data: updateData,
     });
 
+    if (result.count === 0) {
+      return fail("Item not found.", { code: "NOT_FOUND" });
+    }
+
     await recordAudit({
-      action: "item.updated",
+      action: AUDIT_ACTIONS.ITEM_UPDATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "Item",
       resourceId: itemId,
       metadata: { fields: Object.keys(updateData) },
@@ -489,54 +549,65 @@ export async function updateItemAction(
     return { success: true };
   } catch (err) {
     console.error("[updateItemAction]", err);
-    return { success: false, error: "Failed to update item." };
+    return fail("Failed to update item.", { code: "INTERNAL" });
   }
 }
 
+/**
+ * Items are removed only while nothing references them. Once an item has been
+ * assigned to a customer catalogue it must be deactivated instead, so historical
+ * priced lines can still be resolved.
+ */
 export async function deleteItemAction(
   itemId: string,
   tenantId: string,
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
+  const parsed = itemLocatorSchema.safeParse({ itemId, tenantId });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_DELETE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "deleteItemAction");
   }
 
-  const existingItem = await prisma.item.findUnique({
-    where: { id: itemId },
-    select: { id: true, tenantId: true, status: true },
+  const existingItem = await prisma.item.findFirst({
+    where: { id: itemId, tenantId: context.tenantId },
+    select: { id: true, name: true },
   });
 
-  if (!existingItem || existingItem.tenantId !== tenantId) {
-    return { success: false, error: "Item not found." };
+  if (!existingItem) {
+    return fail("Item not found.", { code: "NOT_FOUND" });
   }
 
-  const hasContactItems = await prisma.contactItem.findFirst({
-    where: { itemId, tenantId },
+  const referencedByContact = await prisma.contactItem.findFirst({
+    where: { itemId, tenantId: context.tenantId },
     select: { id: true },
   });
 
-  if (hasContactItems) {
-    return {
-      success: false,
-      error: "Cannot delete item: it is assigned to customer-specific catalogues. Deactivate instead.",
-    };
+  if (referencedByContact) {
+    return fail(
+      "Cannot delete item: it is assigned to customer-specific catalogues. Deactivate instead.",
+      { code: "CONFLICT" },
+    );
   }
 
   try {
-    await prisma.item.delete({ where: { id: itemId } });
+    await prisma.item.delete({ where: { id: existingItem.id } });
 
     await recordAudit({
-      action: "item.deleted",
+      action: AUDIT_ACTIONS.ITEM_DELETED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "Item",
       resourceId: itemId,
     });
@@ -544,64 +615,63 @@ export async function deleteItemAction(
     return { success: true };
   } catch (err) {
     console.error("[deleteItemAction]", err);
-    return { success: false, error: "Failed to delete item." };
+    return fail("Failed to delete item.", { code: "INTERNAL" });
   }
 }
 
-export async function getItemsAction(
-  rawInput: unknown,
-): Promise<ActionResult<{
-  items: Prisma.ItemGetPayload<{ include: { taxRate: { include: { category: true } } } }>[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}>> {
+export async function getItemsAction(rawInput: unknown): Promise<
+  ActionResult<{
+    items: Prisma.ItemGetPayload<{
+      include: { taxRate: { include: { category: true } } };
+    }>[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  }>
+> {
   const session = await requireAuth();
 
-  const result = itemQuerySchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid query parameters.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = itemQuerySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid query parameters.");
   }
 
-  const { tenantId, search, type, status, page, pageSize, sortBy, sortOrder } = result.data;
+  const { tenantId, search, type, status, page, pageSize, sortBy, sortOrder } =
+    parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getItemsAction");
   }
 
   const where: Prisma.ItemWhereInput = {
-    tenantId,
-    ...(type && { type }),
-    ...(status && { status }),
-    ...(search && {
-      OR: [
-        { name: { contains: search, mode: "insensitive" } },
-        { sku: { contains: search, mode: "insensitive" } },
-        { description: { contains: search, mode: "insensitive" } },
-      ],
-    }),
+    tenantId: context.tenantId,
+    ...(type ? { type } : {}),
+    ...(status ? { status } : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: "insensitive" } },
+            { sku: { contains: search, mode: "insensitive" } },
+            { description: { contains: search, mode: "insensitive" } },
+          ],
+        }
+      : {}),
   };
 
   try {
     const [items, total] = await Promise.all([
       prisma.item.findMany({
         where,
-        include: {
-          taxRate: {
-            include: { category: { select: { id: true, name: true } } },
-          },
-        },
+        include: { taxRate: { include: { category: true } } },
+        // sortBy comes from the validated enum, never from free text.
         orderBy: { [sortBy]: sortOrder },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -616,12 +686,12 @@ export async function getItemsAction(
         total,
         page,
         pageSize,
-        totalPages: Math.ceil(total / pageSize),
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
       },
     };
   } catch (err) {
     console.error("[getItemsAction]", err);
-    return { success: false, error: "Failed to load items." };
+    return fail("Failed to load items.", { code: "INTERNAL" });
   }
 }
 
@@ -631,31 +701,31 @@ export async function getItemAction(
 ): Promise<ActionResult<{ item: ItemWithDetails | null }>> {
   const session = await requireAuth();
 
+  const parsed = itemLocatorSchema.safeParse({ itemId, tenantId });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getItemAction");
   }
 
   try {
     const item = await prisma.item.findFirst({
-      where: { id: itemId, tenantId },
-      include: {
-        taxRate: { include: { category: true } },
-        contactItems: {
-          include: { contact: { select: { id: true, firstName: true, lastName: true, companyName: true, type: true } } },
-          orderBy: { createdAt: "desc" },
-        },
-      },
+      where: { id: itemId, tenantId: context.tenantId },
+      include: itemInclude,
     });
 
     return { success: true, data: { item } };
   } catch (err) {
     console.error("[getItemAction]", err);
-    return { success: false, error: "Failed to load item." };
+    return fail("Failed to load item.", { code: "INTERNAL" });
   }
 }

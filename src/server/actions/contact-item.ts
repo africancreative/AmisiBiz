@@ -1,34 +1,56 @@
 "use server";
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { requireAuth } from "@/lib/auth/helpers";
 import { authorizeTenant } from "@/server/auth/authorization";
 import { PERMISSIONS } from "@/lib/auth/permissions";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
+import { fail, type ActionResult } from "@/lib/errors";
+import { authorizationFailure, invalidInput } from "@/server/actions/_shared";
 import {
   createContactItemSchema,
   updateContactItemSchema,
   deleteContactItemSchema,
+  contactItemLocatorSchema,
+  availableItemsQuerySchema,
   contactItemQuerySchema,
-  type CreateContactItemInput,
-  type UpdateContactItemInput,
-  type ContactItemQueryInput,
 } from "@/lib/validations/contact-item";
-import type { Prisma } from "@prisma/client";
-import type { ActionResult } from "@/lib/errors";
+
+const contactItemInclude = {
+  item: { include: { taxRate: { include: { category: true } } } },
+} satisfies Prisma.ContactItemInclude;
 
 type ContactItemWithItem = Prisma.ContactItemGetPayload<{
-  include: { item: { include: { taxRate: { include: { category: true } } } } };
+  include: typeof contactItemInclude;
 }>;
 
-function authzError<T = void>(error: unknown): ActionResult<T> {
-  if (error instanceof Error && /not permitted|access/i.test(error.message)) {
-    return { success: false, error: error.message };
+/**
+ * Explicit mapping again: only the five customer-specific fields can be written,
+ * and `contactId`/`itemId`/`tenantId` are structurally unreachable from an update
+ * payload.
+ */
+function toContactItemUpdateData(data: {
+  customCode?: string | null | undefined;
+  customName?: string | null | undefined;
+  agreedPrice?: string | undefined;
+  discountPercent?: string | undefined;
+  isAvailable?: boolean | undefined;
+}): Prisma.ContactItemUpdateInput {
+  const text = (value: string | null | undefined): string | null =>
+    value?.trim() ? value.trim() : null;
+
+  const update: Prisma.ContactItemUpdateInput = {};
+  if (data.customCode !== undefined) update.customCode = text(data.customCode);
+  if (data.customName !== undefined) update.customName = text(data.customName);
+  if (data.agreedPrice !== undefined) {
+    update.agreedPrice = new Prisma.Decimal(data.agreedPrice);
   }
-  return {
-    success: false,
-    error: "You are not permitted to perform this action.",
-  };
+  if (data.discountPercent !== undefined) {
+    update.discountPercent = new Prisma.Decimal(data.discountPercent);
+  }
+  if (data.isAvailable !== undefined) update.isAvailable = data.isAvailable;
+  return update;
 }
 
 export async function createContactItemAction(
@@ -36,59 +58,72 @@ export async function createContactItemAction(
 ): Promise<ActionResult<{ contactItemId: string }>> {
   const session = await requireAuth();
 
-  const result = createContactItemSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = createContactItemSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { tenantId, contactId, itemId, ...data } = result.data;
+  const { tenantId, contactId, itemId, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_CREATE,
     );
   } catch (err) {
-    return authzError<{ contactItemId: string }>(err);
+    return authorizationFailure(err, "createContactItemAction");
   }
 
+  // Both sides must belong to the authorized tenant: this is what stops a
+  // customer-specific price being attached to another business's contact or
+  // catalogue item.
   const [contact, item] = await Promise.all([
     prisma.contact.findFirst({
-      where: { id: contactId, tenantId },
+      where: { id: contactId, tenantId: context.tenantId },
       select: { id: true, status: true },
     }),
     prisma.item.findFirst({
-      where: { id: itemId, tenantId },
-      select: { id: true, status: true, unitPrice: true },
+      where: { id: itemId, tenantId: context.tenantId },
+      select: { id: true, status: true },
     }),
   ]);
 
   if (!contact) {
-    return { success: false, error: "Contact not found.", fieldErrors: { contactId: ["Contact not found"] } };
+    return {
+      success: false,
+      error: "Contact not found.",
+      code: "NOT_FOUND",
+      fieldErrors: { contactId: ["Contact not found"] },
+    };
   }
   if (!item) {
-    return { success: false, error: "Item not found.", fieldErrors: { itemId: ["Item not found"] } };
+    return {
+      success: false,
+      error: "Item not found.",
+      code: "NOT_FOUND",
+      fieldErrors: { itemId: ["Item not found"] },
+    };
   }
   if (contact.status === "ARCHIVED") {
-    return { success: false, error: "Cannot assign items to an archived contact." };
+    return fail("Cannot assign items to an archived contact.", {
+      code: "CONFLICT",
+    });
   }
   if (item.status === "INACTIVE") {
-    return { success: false, error: "Cannot assign an inactive item." };
+    return fail("Cannot assign an inactive item.", { code: "CONFLICT" });
   }
 
   const existing = await prisma.contactItem.findFirst({
-    where: { tenantId, contactId, itemId },
+    where: { tenantId: context.tenantId, contactId, itemId },
     select: { id: true },
   });
   if (existing) {
     return {
       success: false,
       error: "This item is already assigned to this contact.",
+      code: "CONFLICT",
       fieldErrors: { itemId: ["Item already assigned"] },
     };
   }
@@ -96,30 +131,32 @@ export async function createContactItemAction(
   try {
     const contactItem = await prisma.contactItem.create({
       data: {
-        tenantId,
-        contactId,
-        itemId,
+        tenantId: context.tenantId,
+        contactId: contact.id,
+        itemId: item.id,
         customCode: data.customCode?.trim() || null,
         customName: data.customName?.trim() || null,
         agreedPrice: new Prisma.Decimal(data.agreedPrice),
         discountPercent: new Prisma.Decimal(data.discountPercent),
         isAvailable: data.isAvailable,
       },
+      select: { id: true },
     });
 
     await recordAudit({
-      action: "contactItem.created",
+      action: AUDIT_ACTIONS.CONTACT_ITEM_CREATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "ContactItem",
       resourceId: contactItem.id,
-      metadata: { contactId, itemId, agreedPrice: data.agreedPrice },
+      // Amounts are commercial terms; only the linkage is audited.
+      metadata: { contactId: contact.id, itemId: item.id },
     });
 
     return { success: true, data: { contactItemId: contactItem.id } };
   } catch (err) {
     console.error("[createContactItemAction]", err);
-    return { success: false, error: "Failed to assign item to contact." };
+    return fail("Failed to assign item to contact.", { code: "INTERNAL" });
   }
 }
 
@@ -128,59 +165,49 @@ export async function updateContactItemAction(
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
-  const result = updateContactItemSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = updateContactItemSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { contactItemId, tenantId, ...data } = result.data;
+  const { contactItemId, tenantId, ...data } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_UPDATE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "updateContactItemAction");
   }
 
-  const existing = await prisma.contactItem.findUnique({
-    where: { id: contactItemId },
-    select: { id: true, tenantId: true, contactId: true, itemId: true },
+  const existing = await prisma.contactItem.findFirst({
+    where: { id: contactItemId, tenantId: context.tenantId },
+    select: { id: true },
   });
 
-  if (!existing || existing.tenantId !== tenantId) {
-    return { success: false, error: "Contact item not found." };
+  if (!existing) {
+    return fail("Contact item not found.", { code: "NOT_FOUND" });
   }
 
-  const updateData: Prisma.ContactItemUpdateInput = {};
-  for (const [key, value] of Object.entries(data)) {
-    if (value !== undefined) {
-      if (typeof value === "string" && (key === "agreedPrice" || key === "discountPercent")) {
-        updateData[key] = new Prisma.Decimal(value);
-      } else if (typeof value === "string") {
-        updateData[key] = value.trim() || null;
-      } else {
-        updateData[key] = value;
-      }
-    }
-  }
+  const updateData = toContactItemUpdateData(data);
 
   try {
-    await prisma.contactItem.update({
-      where: { id: contactItemId },
+    const result = await prisma.contactItem.updateMany({
+      where: { id: contactItemId, tenantId: context.tenantId },
       data: updateData,
     });
 
+    if (result.count === 0) {
+      return fail("Contact item not found.", { code: "NOT_FOUND" });
+    }
+
     await recordAudit({
-      action: "contactItem.updated",
+      action: AUDIT_ACTIONS.CONTACT_ITEM_UPDATED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "ContactItem",
       resourceId: contactItemId,
       metadata: { fields: Object.keys(updateData) },
@@ -189,7 +216,7 @@ export async function updateContactItemAction(
     return { success: true };
   } catch (err) {
     console.error("[updateContactItemAction]", err);
-    return { success: false, error: "Failed to update contact item." };
+    return fail("Failed to update contact item.", { code: "INTERNAL" });
   }
 }
 
@@ -198,103 +225,98 @@ export async function deleteContactItemAction(
 ): Promise<ActionResult> {
   const session = await requireAuth();
 
-  const result = deleteContactItemSchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid input.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = deleteContactItemSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
   }
 
-  const { contactItemId, tenantId } = result.data;
+  const { contactItemId, tenantId } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_DELETE,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "deleteContactItemAction");
   }
 
-  const existing = await prisma.contactItem.findUnique({
-    where: { id: contactItemId },
-    select: { id: true, tenantId: true },
+  const existing = await prisma.contactItem.findFirst({
+    where: { id: contactItemId, tenantId: context.tenantId },
+    select: { id: true, itemId: true, contactId: true },
   });
 
-  if (!existing || existing.tenantId !== tenantId) {
-    return { success: false, error: "Contact item not found." };
+  if (!existing) {
+    return fail("Contact item not found.", { code: "NOT_FOUND" });
   }
 
   try {
-    await prisma.contactItem.delete({ where: { id: contactItemId } });
+    // Removing an agreement is allowed: the assignment is not a financial
+    // record. The default catalogue item and the contact itself are untouched.
+    await prisma.contactItem.delete({ where: { id: existing.id } });
 
     await recordAudit({
-      action: "contactItem.deleted",
+      action: AUDIT_ACTIONS.CONTACT_ITEM_REMOVED,
       userId: session.user.id,
-      tenantId,
+      tenantId: context.tenantId,
       resource: "ContactItem",
       resourceId: contactItemId,
+      metadata: { itemId: existing.itemId, contactId: existing.contactId },
     });
 
     return { success: true };
   } catch (err) {
     console.error("[deleteContactItemAction]", err);
-    return { success: false, error: "Failed to remove item from contact." };
+    return fail("Failed to remove item from contact.", { code: "INTERNAL" });
   }
 }
 
-export async function getContactItemsAction(
-  rawInput: unknown,
-): Promise<ActionResult<{
-  contactItems: Prisma.ContactItemGetPayload<{ include: { item: { include: { taxRate: { include: { category: true } } } } } }>[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-}>> {
+export async function getContactItemsAction(rawInput: unknown): Promise<
+  ActionResult<{
+    contactItems: Prisma.ContactItemGetPayload<{
+      include: {
+        item: { include: { taxRate: { include: { category: true } } } };
+      };
+    }>[];
+    total: number;
+    page: number;
+    pageSize: number;
+    totalPages: number;
+  }>
+> {
   const session = await requireAuth();
 
-  const result = contactItemQuerySchema.safeParse(rawInput);
-  if (!result.success) {
-    return {
-      success: false,
-      error: "Invalid query parameters.",
-      fieldErrors: result.error.flatten().fieldErrors as Record<string, string[]>,
-    };
+  const parsed = contactItemQuerySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid query parameters.");
   }
 
-  const { tenantId, contactId, itemId, page, pageSize } = result.data;
+  const { tenantId, contactId, itemId, page, pageSize } = parsed.data;
 
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getContactItemsAction");
   }
 
   const where: Prisma.ContactItemWhereInput = {
-    tenantId,
-    ...(contactId && { contactId }),
-    ...(itemId && { itemId }),
+    tenantId: context.tenantId,
+    ...(contactId ? { contactId } : {}),
+    ...(itemId ? { itemId } : {}),
   };
 
   try {
     const [contactItems, total] = await Promise.all([
       prisma.contactItem.findMany({
         where,
-        include: {
-          item: {
-            include: {
-              taxRate: { include: { category: { select: { id: true, name: true } } } },
-            },
-          },
-        },
+        include: contactItemInclude,
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -309,67 +331,77 @@ export async function getContactItemsAction(
         total,
         page,
         pageSize,
-        totalPages: Math.ceil(total / pageSize),
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
       },
     };
   } catch (err) {
     console.error("[getContactItemsAction]", err);
-    return { success: false, error: "Failed to load contact items." };
+    return fail("Failed to load contact items.", { code: "INTERNAL" });
   }
 }
 
+/**
+ * Catalogue items this contact has NOT yet been given a customer-specific
+ * agreement for. The default catalogue stays separately visible/usable — this is
+ * an assignment picker, not a replacement list.
+ */
 export async function getAvailableItemsForContactAction(
   contactId: string,
   tenantId: string,
-): Promise<ActionResult<{ items: Prisma.ItemGetPayload<{ include: { taxRate: { include: { category: true } } } }>[] }>> {
+): Promise<
+  ActionResult<{
+    items: Prisma.ItemGetPayload<{
+      include: { taxRate: { include: { category: true } } };
+    }>[];
+  }>
+> {
   const session = await requireAuth();
 
+  const parsed = availableItemsQuerySchema.safeParse({ contactId, tenantId });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getAvailableItemsForContactAction");
   }
 
   const contact = await prisma.contact.findFirst({
-    where: { id: contactId, tenantId },
+    where: { id: contactId, tenantId: context.tenantId },
     select: { id: true, status: true },
   });
 
   if (!contact) {
-    return { success: false, error: "Contact not found." };
+    return fail("Contact not found.", { code: "NOT_FOUND" });
   }
   if (contact.status === "ARCHIVED") {
-    return { success: false, error: "Cannot assign items to an archived contact." };
+    return fail("Cannot assign items to an archived contact.", {
+      code: "CONFLICT",
+    });
   }
-
-  const assignedItemIds = await prisma.contactItem.findMany({
-    where: { tenantId, contactId },
-    select: { itemId: true },
-  });
-
-  const assignedIds = assignedItemIds.map((ci) => ci.itemId);
 
   try {
     const items = await prisma.item.findMany({
       where: {
-        tenantId,
+        tenantId: context.tenantId,
         status: "ACTIVE",
-        id: { notIn: assignedIds.length > 0 ? assignedIds : undefined },
+        contactItems: { none: { contactId: contact.id } },
       },
-      include: {
-        taxRate: { include: { category: { select: { id: true, name: true } } } },
-      },
+      include: { taxRate: { include: { category: true } } },
       orderBy: { name: "asc" },
     });
 
     return { success: true, data: { items } };
   } catch (err) {
     console.error("[getAvailableItemsForContactAction]", err);
-    return { success: false, error: "Failed to load available items." };
+    return fail("Failed to load available items.", { code: "INTERNAL" });
   }
 }
 
@@ -379,31 +411,34 @@ export async function getContactItemAction(
 ): Promise<ActionResult<{ contactItem: ContactItemWithItem | null }>> {
   const session = await requireAuth();
 
+  const parsed = contactItemLocatorSchema.safeParse({
+    contactItemId,
+    tenantId,
+  });
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  let context;
   try {
-    await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.ITEMS_READ,
     );
   } catch (err) {
-    return authzError(err);
+    return authorizationFailure(err, "getContactItemAction");
   }
 
   try {
     const contactItem = await prisma.contactItem.findFirst({
-      where: { id: contactItemId, tenantId },
-      include: {
-        item: {
-          include: {
-            taxRate: { include: { category: { select: { id: true, name: true } } } },
-          },
-        },
-      },
+      where: { id: contactItemId, tenantId: context.tenantId },
+      include: contactItemInclude,
     });
 
     return { success: true, data: { contactItem } };
   } catch (err) {
     console.error("[getContactItemAction]", err);
-    return { success: false, error: "Failed to load contact item." };
+    return fail("Failed to load contact item.", { code: "INTERNAL" });
   }
 }

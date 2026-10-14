@@ -25,6 +25,24 @@ export const AUDIT_ACTIONS = {
   PLATFORM_TENANT_ACTIVATED: "platform.tenantActivated",
   PLATFORM_TENANT_REACTIVATED: "platform.tenantReactivated",
   PLATFORM_TENANT_OWNER_INVITED: "platform.tenantOwnerInvited",
+  // Phase 04 — business branding, contacts CRM and catalogue. Metadata for
+  // these events records field names and ids only, never PII or prices.
+  BRANDING_UPDATED: "branding.updated",
+  BRANDING_LOGO_UPLOADED: "branding.logoUploaded",
+  BRANDING_LOGO_DELETED: "branding.logoDeleted",
+  CONTACT_CREATED: "contact.created",
+  CONTACT_UPDATED: "contact.updated",
+  CONTACT_ARCHIVED: "contact.archived",
+  CONTACT_RESTORED: "contact.restored",
+  TAX_CATEGORY_CREATED: "taxCategory.created",
+  TAX_CATEGORY_UPDATED: "taxCategory.updated",
+  TAX_CATEGORY_DELETED: "taxCategory.deleted",
+  ITEM_CREATED: "item.created",
+  ITEM_UPDATED: "item.updated",
+  ITEM_DELETED: "item.deleted",
+  CONTACT_ITEM_CREATED: "contactItem.created",
+  CONTACT_ITEM_UPDATED: "contactItem.updated",
+  CONTACT_ITEM_REMOVED: "contactItem.removed",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

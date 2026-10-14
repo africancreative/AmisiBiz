@@ -73,3 +73,23 @@ export function safeJsonParse<T>(str: string): T | undefined {
     return undefined;
   }
 }
+
+/**
+ * Parses a query-string number into a bounded positive integer.
+ *
+ * Search params are attacker-controlled text: `?page=abc` must not become
+ * `NaN` (which Prisma rejects as `skip: NaN`), and `?page=999999999` must not
+ * turn into an unbounded offset. Anything unparsable or out of range falls back
+ * to `fallback`.
+ */
+export function parsePageParam(
+  value: string | undefined,
+  { fallback = 1, max = 100_000 } = {},
+): number {
+  const raw = value?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > max)
+    return fallback;
+  return parsed;
+}

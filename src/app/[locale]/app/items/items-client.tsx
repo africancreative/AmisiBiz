@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import type { Prisma } from "@prisma/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -16,11 +17,28 @@ import {
 } from "@/components/ui/table";
 import { Pagination } from "@/components/ui/pagination";
 import { EmptyState } from "@/components/ui/state";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ItemDialog } from "@/components/items/item-dialog";
-import { getItemsAction, deleteItemAction, getTaxCategoriesAction } from "@/server/actions/item";
-import type { Item } from "@prisma/client";
-import { Loader2, Search, ChevronLeft, ChevronRight, Tag, Eye } from "lucide-react";
+import { getItemsAction, deleteItemAction } from "@/server/actions/item";
+import type {
+  ItemQueryInput,
+  ItemStatus,
+  ItemType,
+} from "@/lib/validations/item";
+import { formatMoney, formatPercent } from "@/lib/format/money";
+import {
+  Loader2,
+  Search,
+  ChevronUp,
+  ChevronDown,
+  Plus,
+  Edit,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+
+type SortField = ItemQueryInput["sortBy"];
+type SortOrder = ItemQueryInput["sortOrder"];
 
 interface ItemsClientProps {
   locale: string;
@@ -38,14 +56,42 @@ interface ItemsClientProps {
   description: string;
 }
 
-type ItemWithTaxRate = Item & {
-  taxRate: {
-    id: string;
-    name: string;
-    rate: { toString: () => string };
-    category: { id: string; name: string } | null;
-  } | null;
-};
+/** The list projection the Server Action returns, including its tax link. */
+type ItemRow = Prisma.ItemGetPayload<{
+  include: { taxRate: { include: { category: true } } };
+}>;
+
+const PAGE_SIZE = 25;
+
+const SORT_FIELDS: readonly SortField[] = [
+  "createdAt",
+  "updatedAt",
+  "name",
+  "sku",
+  "unitPrice",
+];
+
+/**
+ * Query-string values are untrusted text; they are whitelisted against the same
+ * enums the Server Action uses before they can reach a Prisma `orderBy`.
+ */
+function toSortField(value: string): SortField {
+  return (SORT_FIELDS as readonly string[]).includes(value)
+    ? (value as SortField)
+    : "createdAt";
+}
+
+function toSortOrder(value: string): SortOrder {
+  return value === "asc" ? "asc" : "desc";
+}
+
+function toItemType(value: string): ItemType | "" {
+  return value === "PRODUCT" || value === "SERVICE" ? value : "";
+}
+
+function toItemStatus(value: string): ItemStatus | "" {
+  return value === "ACTIVE" || value === "INACTIVE" ? value : "";
+}
 
 export function ItemsClient({
   locale,
@@ -65,22 +111,30 @@ export function ItemsClient({
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [items, setItems] = React.useState<ItemWithTaxRate[]>([]);
+  const [items, setItems] = React.useState<ItemRow[]>([]);
   const [total, setTotal] = React.useState(0);
   const [totalPages, setTotalPages] = React.useState(1);
   const [isLoading, setIsLoading] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [showDialog, setShowDialog] = React.useState(false);
-  const [editingItem, setEditingItem] = React.useState<ItemWithTaxRate | null>(null);
-  const [deletingItem, setDeletingItem] = React.useState<ItemWithTaxRate | null>(null);
+  const [editingItem, setEditingItem] = React.useState<ItemRow | null>(null);
+  const [deletingItem, setDeletingItem] = React.useState<ItemRow | null>(null);
 
   const [page, setPage] = React.useState(initialPage);
   const [search, setSearch] = React.useState(initialSearch);
-  const [type, setType] = React.useState(initialType);
-  const [status, setStatus] = React.useState(initialStatus);
-  const [sortBy, setSortBy] = React.useState(initialSortBy);
-  const [sortOrder, setSortOrder] = React.useState(initialSortOrder);
+  const [type, setType] = React.useState<ItemType | "">(
+    toItemType(initialType),
+  );
+  const [status, setStatus] = React.useState<ItemStatus | "">(
+    toItemStatus(initialStatus),
+  );
+  const [sortBy, setSortBy] = React.useState<SortField>(
+    toSortField(initialSortBy),
+  );
+  const [sortOrder, setSortOrder] = React.useState<SortOrder>(
+    toSortOrder(initialSortOrder),
+  );
 
   const fetchItems = React.useCallback(async () => {
     setIsLoading(true);
@@ -92,29 +146,48 @@ export function ItemsClient({
         type: type || undefined,
         status: status || undefined,
         page,
-        pageSize: 25,
-        sortBy: sortBy as "createdAt" | "updatedAt" | "name" | "sku" | "unitPrice",
-        sortOrder: sortOrder as "asc" | "desc",
+        pageSize: PAGE_SIZE,
+        sortBy,
+        sortOrder,
       });
       if (!result.success) {
         setServerError(result.error || "Failed to load items");
-      } else if (result.data) {
-        setItems(result.data.items as ItemWithTaxRate[]);
+        return;
+      }
+      if (result.data) {
+        setItems(result.data.items);
         setTotal(result.data.total);
         setTotalPages(result.data.totalPages);
-      } else {
-        setServerError("Failed to load items");
       }
-    } catch (err) {
-      setServerError("An unexpected error occurred");
+    } catch {
+      setServerError("Something went wrong while loading. Please try again.");
     } finally {
       setIsLoading(false);
     }
   }, [tenantId, search, type, status, page, sortBy, sortOrder]);
 
   React.useEffect(() => {
-    fetchItems();
+    void fetchItems();
   }, [fetchItems]);
+
+  // The URL drives the list: every search, filter, sort and page change is a
+  // `router.push` that re-renders the server parent with new props, so the local
+  // mirrors have to follow them.
+  React.useEffect(() => {
+    setPage(initialPage);
+    setSearch(initialSearch);
+    setType(toItemType(initialType));
+    setStatus(toItemStatus(initialStatus));
+    setSortBy(toSortField(initialSortBy));
+    setSortOrder(toSortOrder(initialSortOrder));
+  }, [
+    initialPage,
+    initialSearch,
+    initialType,
+    initialStatus,
+    initialSortBy,
+    initialSortOrder,
+  ]);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -126,7 +199,12 @@ export function ItemsClient({
     router.push(`?${params.toString()}`);
   };
 
-  const handleFilterChange = (key: string, value: string) => {
+  const handleFilterChange = (key: "type" | "status", value: string) => {
+    // Update the local mirror as well as the URL: the server re-render that
+    // follows is asynchronous, and a controlled `<select>` that ignores the
+    // change would snap back to the previous value.
+    if (key === "type") setType(toItemType(value));
+    else setStatus(toItemStatus(value));
     setPage(1);
     const params = new URLSearchParams(searchParams.toString());
     if (value) params.set(key, value);
@@ -135,16 +213,15 @@ export function ItemsClient({
     router.push(`?${params.toString()}`);
   };
 
-  const handleSort = (column: string) => {
-    if (sortBy === column) {
-      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
-    } else {
-      setSortBy(column);
-      setSortOrder("asc");
-    }
+  const handleSort = (column: SortField) => {
+    const nextOrder: SortOrder =
+      sortBy === column ? (sortOrder === "asc" ? "desc" : "asc") : "asc";
+    setSortBy(column);
+    setSortOrder(nextOrder);
+
     const params = new URLSearchParams(searchParams.toString());
     params.set("sortBy", column);
-    params.set("sortOrder", sortOrder === "asc" ? "desc" : "asc");
+    params.set("sortOrder", nextOrder);
     router.push(`?${params.toString()}`);
   };
 
@@ -153,12 +230,12 @@ export function ItemsClient({
     setShowDialog(true);
   };
 
-  const handleEdit = (item: ItemWithTaxRate) => {
+  const handleEdit = (item: ItemRow) => {
     setEditingItem(item);
     setShowDialog(true);
   };
 
-  const handleDelete = async (item: ItemWithTaxRate) => {
+  const handleDelete = (item: ItemRow) => {
     if (!canDelete) return;
     setDeletingItem(item);
   };
@@ -170,14 +247,13 @@ export function ItemsClient({
     try {
       const result = await deleteItemAction(deletingItem.id, tenantId);
       if (result.success) {
-        setShowDialog(false);
         setDeletingItem(null);
-        fetchItems();
+        void fetchItems();
       } else {
         setServerError(result.error || "Failed to delete item");
       }
-    } catch (err) {
-      setServerError("An unexpected error occurred");
+    } catch {
+      setServerError("Something went wrong. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -186,18 +262,7 @@ export function ItemsClient({
   const handleDialogSuccess = () => {
     setShowDialog(false);
     setEditingItem(null);
-    fetchItems();
-  };
-
-  const formatPrice = (price: { toString: () => string } | number | string) => {
-    const num = typeof price === "string" ? parseFloat(price) : typeof price === "number" ? price : Number(price.toString());
-    return new Intl.NumberFormat(locale, { style: "currency", currency: "KES", minimumFractionDigits: 2 }).format(num);
-  };
-
-  const formatTaxRate = (rate: { toString: () => string } | number | string | null) => {
-    if (!rate) return "—";
-    const num = typeof rate === "string" ? parseFloat(rate) : typeof rate === "number" ? rate : Number(rate.toString());
-    return `${(num * 100).toFixed(2)}%`;
+    void fetchItems();
   };
 
   return (
@@ -209,21 +274,24 @@ export function ItemsClient({
         </div>
         {canCreate && (
           <Button onClick={handleCreate}>
-            <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
+            <Plus className="h-4 w-4 mr-2" />
             New Item
           </Button>
         )}
       </div>
 
       {serverError && (
-        <div className="text-sm text-destructive" role="alert">{serverError}</div>
+        <div className="text-sm text-destructive" role="alert">
+          {serverError}
+        </div>
       )}
 
       <div className="card">
         <div className="p-4 border-b border-border">
-          <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-4">
+          <form
+            onSubmit={handleSearch}
+            className="flex flex-col sm:flex-row gap-4"
+          >
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
@@ -266,7 +334,12 @@ export function ItemsClient({
                     className="flex items-center gap-1 hover:underline"
                   >
                     Name
-                    {sortBy === "name" && (sortOrder === "asc" ? <ChevronUp /> : <ChevronDown />)}
+                    {sortBy === "name" &&
+                      (sortOrder === "asc" ? (
+                        <ChevronUp className="h-3 w-3" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3" />
+                      ))}
                   </button>
                 </TableHead>
                 <TableHead>
@@ -276,7 +349,12 @@ export function ItemsClient({
                     className="flex items-center gap-1 hover:underline"
                   >
                     SKU
-                    {sortBy === "sku" && (sortOrder === "asc" ? <ChevronUp /> : <ChevronDown />)}
+                    {sortBy === "sku" &&
+                      (sortOrder === "asc" ? (
+                        <ChevronUp className="h-3 w-3" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3" />
+                      ))}
                   </button>
                 </TableHead>
                 <TableHead>Type</TableHead>
@@ -287,7 +365,12 @@ export function ItemsClient({
                     className="flex items-center gap-1 hover:underline"
                   >
                     Unit Price
-                    {sortBy === "unitPrice" && (sortOrder === "asc" ? <ChevronUp /> : <ChevronDown />)}
+                    {sortBy === "unitPrice" &&
+                      (sortOrder === "asc" ? (
+                        <ChevronUp className="h-3 w-3" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3" />
+                      ))}
                   </button>
                 </TableHead>
                 <TableHead>Tax</TableHead>
@@ -299,7 +382,12 @@ export function ItemsClient({
                     className="flex items-center gap-1 hover:underline"
                   >
                     Created
-                    {sortBy === "createdAt" && (sortOrder === "asc" ? <ChevronUp /> : <ChevronDown />)}
+                    {sortBy === "createdAt" &&
+                      (sortOrder === "asc" ? (
+                        <ChevronUp className="h-3 w-3" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3" />
+                      ))}
                   </button>
                 </TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -318,7 +406,11 @@ export function ItemsClient({
                     <EmptyState
                       className="border-0 bg-transparent py-12"
                       title="No items found"
-                      description={search || type || status ? "Try adjusting your search or filters." : "Get started by adding your first product or service."}
+                      description={
+                        search || type || status
+                          ? "Try adjusting your search or filters."
+                          : "Get started by adding your first product or service."
+                      }
                     />
                   </TableCell>
                 </TableRow>
@@ -326,24 +418,34 @@ export function ItemsClient({
                 items.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell className="font-medium">{item.name}</TableCell>
-                    <TableCell className="font-mono text-sm">{item.sku || "—"}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {item.sku || "—"}
+                    </TableCell>
                     <TableCell>
-                      <span className={cn(
-                        "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
-                        item.type === "PRODUCT"
-                          ? "bg-blue-100 text-blue-800"
-                          : "bg-purple-100 text-purple-800"
-                      )}>
+                      <span
+                        className={cn(
+                          "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
+                          item.type === "PRODUCT"
+                            ? "bg-blue-100 text-blue-800"
+                            : "bg-purple-100 text-purple-800",
+                        )}
+                      >
                         {item.type === "PRODUCT" ? "Product" : "Service"}
                       </span>
                     </TableCell>
-                    <TableCell className="font-mono">{formatPrice(item.unitPrice)}</TableCell>
+                    <TableCell className="font-mono">
+                      {formatMoney(item.unitPrice.toString(), item.currency)}
+                    </TableCell>
                     <TableCell>
                       {item.taxRate ? (
                         <>
-                          <span className="font-mono text-sm">{formatTaxRate(item.taxRate.rate)}</span>
+                          <span className="font-mono text-sm">
+                            {formatPercent(item.taxRate.rate.toString())}
+                          </span>
                           {item.taxRate.category && (
-                            <span className="ml-1 text-xs text-muted-foreground">({item.taxRate.category.name})</span>
+                            <span className="ml-1 text-xs text-muted-foreground">
+                              ({item.taxRate.category.name})
+                            </span>
                           )}
                         </>
                       ) : (
@@ -351,12 +453,14 @@ export function ItemsClient({
                       )}
                     </TableCell>
                     <TableCell>
-                      <span className={cn(
-                        "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
-                        item.status === "ACTIVE"
-                          ? "bg-green-100 text-green-800"
-                          : "bg-gray-100 text-gray-800"
-                      )}>
+                      <span
+                        className={cn(
+                          "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
+                          item.status === "ACTIVE"
+                            ? "bg-green-100 text-green-800"
+                            : "bg-gray-100 text-gray-800",
+                        )}
+                      >
                         {item.status}
                       </span>
                     </TableCell>
@@ -365,21 +469,24 @@ export function ItemsClient({
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => router.push(`/${locale}/app/items/${item.id}`)} aria-label="View item">
-                          <Eye className="h-4 w-4" />
-                        </Button>
                         {canUpdate && (
-                          <Button variant="ghost" size="icon" onClick={() => handleEdit(item)} aria-label="Edit item">
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                            </svg>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleEdit(item)}
+                            aria-label="Edit item"
+                          >
+                            <Edit className="h-4 w-4" />
                           </Button>
                         )}
                         {canDelete && (
-                          <Button variant="ghost" size="icon" onClick={() => handleDelete(item)} aria-label="Delete item">
-                            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(item)}
+                            aria-label="Delete item"
+                          >
+                            <Trash2 className="h-4 w-4" />
                           </Button>
                         )}
                       </div>
@@ -403,7 +510,8 @@ export function ItemsClient({
               }}
             />
             <p className="text-sm text-muted-foreground mt-2 text-center">
-              Showing {((page - 1) * 25) + 1} to {Math.min(page * 25, total)} of {total} items
+              Showing {(page - 1) * PAGE_SIZE + 1} to{" "}
+              {Math.min(page * PAGE_SIZE, total)} of {total} items
             </p>
           </div>
         )}
@@ -417,16 +525,13 @@ export function ItemsClient({
         />
       )}
       {showDialog && !editingItem && (
-        <ItemDialog
-          tenantId={tenantId}
-          onSuccess={handleDialogSuccess}
-        />
+        <ItemDialog tenantId={tenantId} onSuccess={handleDialogSuccess} />
       )}
 
       {deletingItem && (
         <ConfirmDialog
           title="Delete Item"
-          description={`Are you sure you want to delete "${deletingItem.name}"? This action cannot be undone.`}
+          description={`Are you sure you want to delete "${deletingItem.name}"? Items already used by an issued document cannot be deleted.`}
           onConfirm={confirmDelete}
           onCancel={() => setDeletingItem(null)}
           isLoading={isSubmitting}
@@ -434,43 +539,6 @@ export function ItemsClient({
           variant="danger"
         />
       )}
-    </div>
-  );
-}
-
-function ChevronUp() {
-  return <ChevronLeft className="h-3 w-3" />;
-}
-
-function ChevronDown() {
-  return <ChevronRight className="h-3 w-3" />;
-}
-
-interface ConfirmDialogProps {
-  title: string;
-  description: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-  isLoading: boolean;
-  confirmLabel: string;
-  variant?: "primary" | "danger";
-}
-
-function ConfirmDialog({ title, description, onConfirm, onCancel, isLoading, confirmLabel, variant = "primary" }: ConfirmDialogProps) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-lg">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <p className="mt-2 text-sm text-muted-foreground">{description}</p>
-        <div className="mt-6 flex justify-end gap-3">
-          <Button variant="secondary" onClick={onCancel} disabled={isLoading}>
-            Cancel
-          </Button>
-          <Button variant={variant} onClick={onConfirm} disabled={isLoading}>
-            {isLoading ? "Working..." : confirmLabel}
-          </Button>
-        </div>
-      </div>
     </div>
   );
 }

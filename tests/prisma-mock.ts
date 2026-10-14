@@ -44,6 +44,68 @@ export const prismaMock = {
   auditLog: {
     create: vi.fn(),
   },
+  // ── Phase 04: branding, contacts CRM and catalogue ────────────────────────
+  tenantBranding: {
+    findUnique: vi.fn(),
+    findFirst: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    upsert: vi.fn(),
+  },
+  contact: {
+    findUnique: vi.fn(),
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    count: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    updateMany: vi.fn(),
+    delete: vi.fn(),
+  },
+  contactAddress: {
+    findMany: vi.fn(),
+    create: vi.fn(),
+    createMany: vi.fn(),
+    deleteMany: vi.fn(),
+  },
+  taxCategory: {
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    count: vi.fn(),
+    create: vi.fn(),
+    updateMany: vi.fn(),
+  },
+  taxRate: {
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    create: vi.fn(),
+    createMany: vi.fn(),
+  },
+  item: {
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    count: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    updateMany: vi.fn(),
+    delete: vi.fn(),
+  },
+  contactItem: {
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    count: vi.fn(),
+    create: vi.fn(),
+    updateMany: vi.fn(),
+    delete: vi.fn(),
+  },
+  document: {
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    count: vi.fn(),
+    aggregate: vi.fn(),
+    delete: vi.fn(),
+    deleteMany: vi.fn(),
+  },
   $transaction: vi.fn(),
 };
 
