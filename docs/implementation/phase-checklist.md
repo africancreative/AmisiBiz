@@ -1,6 +1,6 @@
 # AmisiBiz — Phased Implementation Checklist
 
-- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 04.5a (Supabase Auth swap) complete and deployed; Phase 05 documents schema + numbering deployed; **Phase 04.5b — Turborepo monorepo + shared packages + client shells + CI — complete (2026-10-14)**, executed as the owner-directed “Phase 1 — application foundation”; next: 04.5c (shadcn/ui for new UI), 04.5d/04.5e (offline + DPO/eTIMS design docs), then Phase 05 implementation resumes with the engine authored in `@amisibiz/documents`/packages. **Separately, the constitution's Phase 1 directive (core authorization, RBAC catalog and PostgreSQL RLS) is code-complete through task #35 (2026-10-14) and now DB-proven: the integration harness runs 26 cases as `amisibiz_app` against a disposable PostgreSQL and passes, with the behavioral batteries and the clean-room driver committed (#37a/#37b, 2026-10-15 — `phase-01-security-harness-report.md`), the automated bundle scan in place (#37c) and a CI `security` job authored and rehearsed step by step locally but never run (#37d). It is still not live-verified: RLS stays inert until the operator step in `../administration/rls-activation-operator-procedure.md` (#38), and business feature work (Phase 05 tasks #11–#15, the Phase 3 pack) remains gated — the repository half of the gate is met, the operational half is #38. The untracked Phase 03/05 business code that was keeping `type-check`/`build` red is **parked on branch `wip/phase05-business-features`** (`0a67b69`, decision recorded 2026-10-15 as task #52), so `main` is the verified tree again: 17/17 lint + type-check + test tasks, **256 passed / 26 skipped**, build and format green, harness 26/26 including migrations `20261021000000`/`20261021000001`.**
+- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 04.5a (Supabase Auth swap) complete and deployed; Phase 05 documents schema + numbering deployed; **Phase 04.5b — Turborepo monorepo + shared packages + client shells + CI — complete (2026-10-14)**, executed as the owner-directed “Phase 1 — application foundation”; next: 04.5c (shadcn/ui for new UI), 04.5d/04.5e (offline + DPO/eTIMS design docs), then Phase 05 implementation resumes with the engine authored in `@amisibiz/documents`/packages. **Separately, the constitution's Phase 1 directive (core authorization, RBAC catalog and PostgreSQL RLS) is code-complete through task #35 (2026-10-14) and now DB-proven: the integration harness runs 26 cases as `amisibiz_app` against a disposable PostgreSQL and passes, with the behavioral batteries and the clean-room driver committed (#37a/#37b, 2026-10-15 — `phase-01-security-harness-report.md`), the automated bundle scan in place (#37c) and a CI `security` job authored and rehearsed step by step locally but never run (#37d). It is still not live-verified: RLS stays inert until the operator step in `../administration/rls-activation-operator-procedure.md` (#38). The Phase 05 gate was then **opened by the owner's Phase 4 directive** (2026-10-15, _"Directive opens the gate"_), so business feature work is in the tree while #37 and #38 stay open. The Phase 03/05 business code that had been parked on branch `wip/phase05-business-features` (`0a67b69`, task #52) was **resurrected and repaired** into the working tree (tasks #53/#54): the 10 type errors are gone, the missing `document-detail-client.tsx` was written, and the tree now runs **18/18** turbo tasks — **337 passed / 26 skipped**, build and format green, bundle scan clean (205 files / 5.5 MB), harness 26/26 on a fresh database, clean-room chain 78 · 71 + SKIP · 71 + SKIP · 55 · 72 PASS. It is **uncommitted** pending the owner's decision, `main`'s HEAD still ends at `22f035d`, and `0a67b69` stays as the parking record it always was.**
 - **Companion docs:** `../IMPLEMENTATION_STATUS.md` (status dashboard), `phase-00-repository-audit.md` (Phase 0 audit — current), `../architecture/repository-audit.md` (historical), `../architecture/system-design.md`, `../architecture/security-model.md`, `phase-04-completion-report.md`, `phase-03.5-supabase-alignment-audit.md`, `phase-04.5b-monorepo-and-clients-audit.md`, `phase-01-foundation-report.md`, `phase-01-security-design.md` (Phase 1 directive design), `phase-01-security-harness-report.md` (the DB-backed proofs, #37a/#37b), `../RUNBOOK.md` (operations, RLS activation), `../administration/rls-activation-operator-procedure.md` (the #38 walkthrough, step by step, not executed)
 
 Rules: implement **one phase at a time**; do not start a phase whose dependencies are unmet; every phase ends with the verification suite below green and a completion report.
@@ -481,8 +481,11 @@ planId uuid`, Phase 2 battery **55 PASS**, Phase 1 battery **67 PASS** as
   **RLS remains inert** while `amisibiz_app` has no password (#38).
 - **Gate unchanged:** the Phase 1 directive still closes business feature work —
   Phase 05 (#11–#15) stays shut until #37 and #38 pass.
+  _Superseded 2026-10-15:_ the owner's Phase 4 directive opened the gate by
+  direction (_"Directive opens the gate"_) while **#37 and #38 stay open**, so the
+  Phase 05 code is in the tree and RLS is still inert in the deployed app.
 
-### Phase 05 — Documents & PDF generation ✅ COMPLETE (application layer; live verification pending)
+### Phase 05 — Documents & PDF generation 🟡 IN THE WORKING TREE (gates green; uncommitted; audit halted; product gaps open)
 
 - **Brief reconciliation:** this checklist line previously read "Documents &
   PDF generation". The brief's Phase 4 sections (quotations, invoices, delivery
@@ -520,8 +523,8 @@ portalUserId])`, so a `CUSTOMER_PORTAL_USER` maps to at most one contact per
 - **Delivered (tests):** `tests/phase05-documents.test.ts` (46) covering
   arithmetic precision, rounding, derived status, immutable snapshots,
   corrections, quotation conversion (including the retry), numbering, PDF
-  output and both routes' authorization/cross-tenant behaviour. Suite total
-  **337 passed / 13 skipped** (was 291 before this phase).
+  output and both routes' authorization/cross-tenant behaviour. Suite total on
+  this tree: **337 passed / 26 skipped** (12 files passed, 1 skipped).
 - **Delivered (UI + i18n):** the `/app/documents` list, the new-document form
   and the document detail page with the frozen-snapshot preview, status history,
   payments, and the lifecycle actions, plus PDF preview/download; en/fr/sw
@@ -535,6 +538,25 @@ portalUserId])`, so a `CUSTOMER_PORTAL_USER` maps to at most one contact per
   still #36; the PDF writer is a hand-rolled A4 renderer without full script
   shaping; currency is KES-only; the UI was not browser-exercised; concurrent
   numbering is a database guarantee proved by the SQL script, not the mock suite.
+- **This cycle (2026-10-15, the owner's Phase 4 directive):** the parked tree was
+  brought back and repaired — the 10 type errors fixed and the
+  `document-detail-client.tsx` the pages imported but that never existed was
+  written. Gates on that tree: **18/18** turbo tasks
+  (`lint` 0 errors / 1 known `<img>` warning, `type-check` green,
+  **337 passed / 26 skipped**, build green with all five document routes),
+  `format:check` green, `pnpm check:bundles` clean (205 files / 5.5 MB), DB harness
+  **26/26** on a fresh database, clean-room chain **78 · 71 + SKIP · 71 + SKIP · 55
+  · 72 PASS / 0 FAIL**. The work is **uncommitted** pending the owner's decision.
+- **Not a completion claim:** the clause-by-clause audit of the engine against every
+  requirement in the directive (task #55) was **stopped by the owner** mid-review,
+  so `phase-05-documents-report.md` §5 maps criteria to evidence rather than to a
+  finished audit, and no part of this phase is called verified live.
+- **Product gaps, not evidence gaps:** no `TaxRate` read action and no tax picker in
+  the create form, so documents created through the UI are untaxed; no draft-editing
+  screen although `updateDocumentDraftAction` exists; the customer portal is a
+  download route with no portal UI; no test renders a multi-page document or a logo
+  and no PDF was opened; the list and create screens still hardcode English while
+  only the detail client and `documentEnums` are translated (en/fr/sw).
 - **Note:** the old "Phase 05 — Catalogue" slot was absorbed by the expanded
   Phase 04; leftover ideas (price lists, catalogue import, bulk price edits)
   are optional extras without a phase number.
@@ -693,10 +715,16 @@ no remote push — task #30 closed by the owner's two-commit approval):**
    in item 1, or the owner must accept the documented local rehearsal as equivalent.
 4. **#36 — Supabase Storage adoption** for logos (bucket + object policies exist
    in migration 10; the app still writes to `/uploads`).
-5. **04.5c → 04.5d → 04.5e → Phase 05 resumes.** The directive's gate holds:
-   _"Do not begin business feature development until the core authorization and
-   RLS tests pass."_ Phase 05 tasks #11–#15 stay closed until #37 and #38 are
-   done.
+5. **04.5c → 04.5d → 04.5e, and the owner's commit decision on the Phase 4 tree.**
+   The Phase 05 gate was **opened by direction, not by evidence**: the owner's
+   Phase 4 directive (2026-10-15, _"Directive opens the gate"_) put the document
+   engine, actions, routes and UI back into the working tree while #37 and #38
+   remain open, so the constitution's rule — _"Do not begin business feature
+   development until the core authorization and RLS tests pass"_ — is satisfied on
+   the repository half only, and **RLS is still inert in the deployed app**. The
+   first action is therefore the commit decision (the tree is gate-green and exists
+   nowhere but the working directory), then the halted audit (#55) and the product
+   gaps in `phase-05-documents-report.md` §7.
 
 Carried into Phase 08 rather than left implicit: distributed rate limiting,
 email transport + `REQUIRE_EMAIL_VERIFICATION`, Vercel deployment config and

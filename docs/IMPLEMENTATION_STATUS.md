@@ -1,7 +1,8 @@
 # AmisiBiz — Implementation Status
 
-- **Updated:** 2026-10-14 (Phase 2 provider administration, through task #45;
-  committed locally as `f0dfe59` + `b6bbea1`, **not pushed**).
+- **Updated:** 2026-10-15 (the Phase 4 directive — quotations, invoices and
+  delivery notes — through verification; documentation committed, business code
+  still in the working tree pending the owner's commit decision).
 - **Read with:** `implementation/phase-checklist.md` (phase plan & gates),
   `architecture/security-model.md` §13–§14 (what enforcement exists and what does
   not), `architecture/permission-matrix.md`, `administration/provider-console.md`
@@ -55,52 +56,57 @@
   database, and the browser walkthrough — the migration is unapplied there and
   `answerSyncRequest()` still has no transport caller (Phase 06). Record:
   `implementation/phase-02-provider-administration-report.md`.
-- **Phase 05 (document engine/PDF/UI): gated.** The directive forbids business
-  feature work until the core authorization and RLS tests pass in a real database
-  harness. That harness now exists and passes (#37a/#37b, 2026-10-15:
-  `tests/integration-security.test.ts`, 26 cases as `amisibiz_app`, plus the
-  committed batteries and `scripts/db/cleanroom-chain.sh`), but the gate is not
-  satisfied by it alone — #38, the operator step that makes RLS non-inert in the
-  deployed app, is still open, so business feature work stays gated by direction
-  rather than by missing tests.
-- **Untracked Phase 03/05 business code: parked off `main` (owner decision,
-  2026-10-15, task #52).** The document services, PDF writer, calculations,
-  numbering, snapshot builder, document and dashboard UI, portal/platform logo
-  routes, three business test suites and migration
-  `20261020000000_phase05_portal_linkage` now live on branch
-  **`wip/phase05-business-features`** (`0a67b69`). That commit is a parking record,
-  not an approval: the code does not compile (it imports a `document-detail-client`
-  component that exists nowhere in the repository) and it has never passed a gate.
-  `main` is the verified tree again, which is why the gates below are green.
+- **Phase 4 directive — quotations, invoices and delivery notes (checklist slot
+  "Phase 05"): implemented in the working tree, gate-verified, not committed, not
+  audited.** The owner opened the business-feature gate by directive
+  (2026-10-15: _"Directive opens the gate"_), so the gate note below is a direction,
+  not a missing test: the repository half is met (`tests/integration-security.test.ts`
+  — 26 cases as `amisibiz_app` — plus the committed batteries and
+  `scripts/db/cleanroom-chain.sh`), while **#38 is still open and RLS remains inert
+  in the deployed app**. The engine, actions, routes, UI and tests are recorded in
+  `implementation/phase-05-documents-report.md`, which deliberately stops short of
+  "complete": the clause-by-clause audit (task #55) was stopped mid-review, and
+  §7 of that report lists the product gaps (no tax picker, no draft-editing screen,
+  no portal UI, PDF bytes never rendered or inspected, mixed-language list/create
+  screens).
+- **The parked business tree was resurrected, repaired and put back in the working
+  tree (owner decision, 2026-10-15, tasks #53/#54).** It had been parked on branch
+  `wip/phase05-business-features` as `0a67b69` (task #52) because it did not
+  compile — it imported a `document-detail-client` component that existed nowhere
+  in the repository. That commit remains a parking record, not an approval. The
+  code is now back, the 10 type errors are fixed, the missing detail client is
+  written, and **18/18 turbo tasks pass on it** (see the Phase 4 run below);
+  `main`'s HEAD still does not contain it until the owner approves the commit.
 
 ## Feature status
 
-| Area                               | Status                                                | Evidence / notes                                                                                                                                                                                                                                                                                       |
-| ---------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Auth & sessions (Supabase Auth)    | Implemented & deployed                                | Phase 04.5a; commit `ed030c7`; `sessionVersion` trust chain live                                                                                                                                                                                                                                       |
-| Authorization / RBAC               | Implemented; DB-side proofs green, CI wiring pending  | 42-permission catalog (9 platform / 33 tenant) mirrored into `Permission`/`RolePermission`; deny-by-default `authorizeTenant`/`authorizePlatform`/`authorizePlatformTenant`; role-change guards also trigger-enforced; catalog + matrix parity asserted in the DB-backed harness (#37d still open)     |
-| Provider support access            | Implemented (unit-proven)                             | `SupportAccessGrant`: one tenant, mandatory reason, default 24 h / max 30 d, revocable, read-only grant set, four audit actions; `has_tenant_write_access` has no support branch                                                                                                                       |
-| Tenant lifecycle & platform admin  | Implemented (Phase 2); live DB unapplied              | Three verified transitions from `TENANT_STATUS_TRANSITIONS`; each permission-gated, reason-bearing, atomic (guarded `updateMany` + history + audit). Suspension = writes/sync denied, reads/downloads kept; no row or storage deletion; no automatic suspension anywhere                               |
-| Provider console (`/admin/*`)      | Implemented (Phase 2); not exercised in a browser     | Provision, search/filter/paginate, lifecycle, plan, branding + preview shells, domains/slug, numbering, owner invitation, status history, audit trail, indicators. Administrator docs: `administration/provider-console.md`                                                                            |
-| Plan catalogue                     | Implemented as **informational only** (Phase 2)       | `Plan` + `Tenant.planId` FK, no price/limit columns, `SELECT`-only for the runtime role, one seeded `standard` plan; assignment audited under `platform.tenants.plan.assign`; grants nothing                                                                                                           |
-| Operational indicators             | Implemented; `lastSyncAt` legitimately `null`         | `lastActivityAt`/`lastSyncAt`/`lastSyncErrorCode` written only by `touch_tenant_activity()` / `record_tenant_sync_attempt()`; no sync transport until Phase 06                                                                                                                                         |
-| Branding (tenant colours/logo)     | Implemented                                           | Phase 04; filesystem logo storage (owner carve-out; see risk S3)                                                                                                                                                                                                                                       |
-| Contacts CRM                       | Implemented                                           | Phase 04; archive-not-delete; outstanding balances from issued docs                                                                                                                                                                                                                                    |
-| Catalogue (items, customer prices) | Implemented                                           | Phase 04; decimal-string money, no floats on financial paths                                                                                                                                                                                                                                           |
-| Documents (schema + numbering)     | Schema deployed; engine/PDF/UI pending                | Phase 05 gated; `allocate_document_number()` in migration 10                                                                                                                                                                                                                                           |
-| RLS policies & grants              | Written and applied; **inert** for the running app    | Migrations 8–10; proven against a disposable PostgreSQL by the committed harness + batteries (`RUNBOOK.md` §4.1/§4.3) — **not** by the deployed app; activation = `RUNBOOK.md` §3 (task #38)                                                                                                           |
-| Least-privileged runtime role      | Role + grants exist; `APP_DATABASE_URL` unpublished   | `amisibiz_app` (`NOINHERIT`, no `BYPASSRLS`); production boot refuses the owner-role fallback                                                                                                                                                                                                          |
-| Scoped DB context                  | Implemented (task #35)                                | `scope.ts` writes the five transaction-local GUCs; fail-closed `ScopeNotSetError`; claims re-read from rows by `SECURITY DEFINER` helpers                                                                                                                                                              |
-| Supabase Storage                   | Policies only; app still uses filesystem `/uploads`   | `tenant-branding` bucket + path-scoped object policies (migration 10 §7); adoption is task #36                                                                                                                                                                                                         |
-| DB-backed integration harness      | Runs, never in CI                                     | `integration-security.test.ts` — 26 cases as `amisibiz_app`, green against a disposable PostgreSQL; self-skips without `TEST_DATABASE_URL`. A `security` CI job exists (#37d) and has been rehearsed step by step locally, but no workflow run exists (no push) — task #37 closes only on one of those |
-| Monorepo & shared packages         | Committed (`f0dfe59`) — still no remote push          | Turborepo 2.11.8; 7 source-only packages; 11 workspace projects                                                                                                                                                                                                                                        |
-| Client shells (Android / Windows)  | Scaffolded only — never compiled                      | Capacitor 8 / Tauri 2; feasibility + prerequisites in each README                                                                                                                                                                                                                                      |
-| CI (GitHub Actions)                | Workflow added — not yet run on GitHub                | Sequence rehearsed green from a pristine copy (18/18 turbo tasks)                                                                                                                                                                                                                                      |
-| Offline / SQLite                   | Not started (by design)                               | Contracts in `@amisibiz/sync`; 04.5d design first                                                                                                                                                                                                                                                      |
-| PDF rendering / download           | Not started (contracts only)                          | `@amisibiz/documents/pdf.ts`; Phase 05; never a KRA/eTIMS invoice                                                                                                                                                                                                                                      |
-| DPO payments / POS                 | Not started (design-only phase pending)               | 04.5e; no simulated live payments                                                                                                                                                                                                                                                                      |
-| KRA/eTIMS                          | Out of scope (separate system; integration note only) | 04.5e note                                                                                                                                                                                                                                                                                             |
-| Vercel deployment                  | Not configured (no `vercel.json`/`.vercel`)           | Phase 08; no deploy claimed                                                                                                                                                                                                                                                                            |
+| Area                               | Status                                                      | Evidence / notes                                                                                                                                                                                                                                                                                         |
+| ---------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth & sessions (Supabase Auth)    | Implemented & deployed                                      | Phase 04.5a; commit `ed030c7`; `sessionVersion` trust chain live                                                                                                                                                                                                                                         |
+| Authorization / RBAC               | Implemented; DB-side proofs green, CI wiring pending        | 42-permission catalog (9 platform / 33 tenant) mirrored into `Permission`/`RolePermission`; deny-by-default `authorizeTenant`/`authorizePlatform`/`authorizePlatformTenant`; role-change guards also trigger-enforced; catalog + matrix parity asserted in the DB-backed harness (#37d still open)       |
+| Provider support access            | Implemented (unit-proven)                                   | `SupportAccessGrant`: one tenant, mandatory reason, default 24 h / max 30 d, revocable, read-only grant set, four audit actions; `has_tenant_write_access` has no support branch                                                                                                                         |
+| Tenant lifecycle & platform admin  | Implemented (Phase 2); live DB unapplied                    | Three verified transitions from `TENANT_STATUS_TRANSITIONS`; each permission-gated, reason-bearing, atomic (guarded `updateMany` + history + audit). Suspension = writes/sync denied, reads/downloads kept; no row or storage deletion; no automatic suspension anywhere                                 |
+| Provider console (`/admin/*`)      | Implemented (Phase 2); not exercised in a browser           | Provision, search/filter/paginate, lifecycle, plan, branding + preview shells, domains/slug, numbering, owner invitation, status history, audit trail, indicators. Administrator docs: `administration/provider-console.md`                                                                              |
+| Plan catalogue                     | Implemented as **informational only** (Phase 2)             | `Plan` + `Tenant.planId` FK, no price/limit columns, `SELECT`-only for the runtime role, one seeded `standard` plan; assignment audited under `platform.tenants.plan.assign`; grants nothing                                                                                                             |
+| Operational indicators             | Implemented; `lastSyncAt` legitimately `null`               | `lastActivityAt`/`lastSyncAt`/`lastSyncErrorCode` written only by `touch_tenant_activity()` / `record_tenant_sync_attempt()`; no sync transport until Phase 06                                                                                                                                           |
+| Branding (tenant colours/logo)     | Implemented                                                 | Phase 04; filesystem logo storage (owner carve-out; see risk S3)                                                                                                                                                                                                                                         |
+| Contacts CRM                       | Implemented                                                 | Phase 04; archive-not-delete; outstanding balances from issued docs                                                                                                                                                                                                                                      |
+| Catalogue (items, customer prices) | Implemented                                                 | Phase 04; decimal-string money, no floats on financial paths                                                                                                                                                                                                                                             |
+| Documents (schema + numbering)     | Schema deployed; engine/actions/UI in the **working tree**  | Phase 04 directive (checklist "Phase 05"): `@amisibiz/documents` engine, 12 server services, read+write actions, list/new/detail screens, en-fr-sw enum catalogue. `allocate_document_number()` ships in migration 10; nothing here is committed or live — `implementation/phase-05-documents-report.md` |
+| Customer portal documents          | Download route only; **no portal UI**                       | `/api/portal/documents/[documentId]/pdf` requires `portal.documents.read`, resolves the caller's single linked `Contact` (`20261020000000`) and 404s another customer's document; unit-proven, never exercised in a browser                                                                              |
+| RLS policies & grants              | Written and applied; **inert** for the running app          | Migrations 8–10; proven against a disposable PostgreSQL by the committed harness + batteries (`RUNBOOK.md` §4.1/§4.3) — **not** by the deployed app; activation = `RUNBOOK.md` §3 (task #38)                                                                                                             |
+| Least-privileged runtime role      | Role + grants exist; `APP_DATABASE_URL` unpublished         | `amisibiz_app` (`NOINHERIT`, no `BYPASSRLS`); production boot refuses the owner-role fallback                                                                                                                                                                                                            |
+| Scoped DB context                  | Implemented (task #35)                                      | `scope.ts` writes the five transaction-local GUCs; fail-closed `ScopeNotSetError`; claims re-read from rows by `SECURITY DEFINER` helpers                                                                                                                                                                |
+| Supabase Storage                   | Policies only; app still uses filesystem `/uploads`         | `tenant-branding` bucket + path-scoped object policies (migration 10 §7); adoption is task #36                                                                                                                                                                                                           |
+| DB-backed integration harness      | Runs, never in CI                                           | `integration-security.test.ts` — 26 cases as `amisibiz_app`, green against a disposable PostgreSQL; self-skips without `TEST_DATABASE_URL`. A `security` CI job exists (#37d) and has been rehearsed step by step locally, but no workflow run exists (no push) — task #37 closes only on one of those   |
+| Monorepo & shared packages         | Committed (`f0dfe59`) — still no remote push                | Turborepo 2.11.8; 7 source-only packages; 11 workspace projects                                                                                                                                                                                                                                          |
+| Client shells (Android / Windows)  | Scaffolded only — never compiled                            | Capacitor 8 / Tauri 2; feasibility + prerequisites in each README                                                                                                                                                                                                                                        |
+| CI (GitHub Actions)                | Workflow added — not yet run on GitHub                      | Sequence rehearsed green from a pristine copy (18/18 turbo tasks)                                                                                                                                                                                                                                        |
+| Offline / SQLite                   | Not started (by design)                                     | Contracts in `@amisibiz/sync`; 04.5d design first                                                                                                                                                                                                                                                        |
+| PDF rendering / download           | Implemented in the working tree — **bytes never inspected** | Dependency-free A4 writer in `@amisibiz/documents` (pagination, repeated table header, page numbers, tenant colours/logo), rendered only from the frozen snapshot; tests assert `%PDF-1.4` … `%%EOF` and byte determinism, no multi-page or logo render was produced or opened                           |
+| DPO payments / POS                 | Not started (design-only phase pending)                     | 04.5e; no simulated live payments                                                                                                                                                                                                                                                                        |
+| KRA/eTIMS                          | Out of scope (separate system; integration note only)       | 04.5e note                                                                                                                                                                                                                                                                                               |
+| Vercel deployment                  | Not configured (no `vercel.json`/`.vercel`)                 | Phase 08; no deploy claimed                                                                                                                                                                                                                                                                              |
 
 ## Verification status (last run 2026-10-14, Phase 2 / task #45 — superseded for the current tree by the follow-up run below)
 
@@ -148,6 +154,25 @@ become a comparison against the owner's unfiltered totals. Details:
 `architecture/security-model.md` §13.6–§13.7 and
 `implementation/phase-01-security-harness-report.md` §5.
 
+### Phase 4 directive run — the document engine back in the tree (2026-10-15, task #57)
+
+Run against the working tree that now carries the resurrected business code
+(52 changed files, +11,295 / −386, plus the new
+`app/[locale]/app/documents/[id]/document-detail-client.tsx`). Full detail,
+acceptance mapping and the list of product gaps:
+`implementation/phase-05-documents-report.md`.
+
+| Gate                                                    | Result                                                                                                                                                                                                   |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm format:check`                                     | green — `All matched files use Prettier code style!`                                                                                                                                                     |
+| `pnpm turbo run lint type-check test:run build --force` | **18/18 tasks**, 0 errors; the only warning is the known `<img>`; build emits all five document routes into `app-path-routes-manifest.json`                                                              |
+| `pnpm turbo run test:run`                               | **337 passed / 26 skipped** (363), Test Files 12 passed / 1 skipped — including `tests/phase05-documents.test.ts` (46 cases)                                                                             |
+| `pnpm check:bundles`                                    | clean — **205 files / 5.5 MB** across `.next/static` + `.next/server`                                                                                                                                    |
+| DB harness on fresh `p4_report_harness`                 | **26 passed / 26** as `amisibiz_app` (the `42501 permission denied` lines are the intended denial probes)                                                                                                |
+| `scripts/db/cleanroom-chain.sh p4_report_chain`         | **78 · 71 + SKIP · 71 + SKIP · 55 · 72 PASS, 0 FAIL**; abort probe fires; step 13 applies `20261020000000` → `20261021000000` → `20261021000001`                                                         |
+| live Supabase project                                   | **unchanged** — 10 applied, 11 and 12 pending, zero business data, no probe run; **RLS still inert (#38)**                                                                                               |
+| **not** verified                                        | the clause-by-clause engine audit (#55, stopped mid-review), any PDF opened or printed, any browser walkthrough, numbering concurrency outside the SQL script, and everything that needs a live database |
+
 ## Open risks (top items — full register: `implementation/phase-04.5b-monorepo-and-clients-audit.md` §5)
 
 1. **S2 — RLS inert:** the runtime cannot yet connect as `amisibiz_app` (no
@@ -169,11 +194,16 @@ become a comparison against the owner's unfiltered totals. Details:
 4. **S6 — No email transport:** verification/password-reset emails are not
    delivered; `REQUIRE_EMAIL_VERIFICATION` stays off, so production registration
    must stay disabled.
-5. **Committed locally only:** `main` carries `f0dfe59` (foundation + Phase 1
-   directive), `b6bbea1` (Phase 2), `3d72698` (docs) and `801e7c6` (the DB-backed
-   harness); the parked business work is `0a67b69` on
-   `wip/phase05-business-features`. There is **no remote push and no CI run**, so
-   none of it has an off-machine copy. The phase split is a file grouping — only
+5. **Committed locally only — and the document work is not even committed:**
+   `main` carries `f0dfe59` (foundation + Phase 1 directive), `b6bbea1` (Phase 2),
+   `3d72698` (docs), `801e7c6` (the DB-backed harness), `87c7938` + `22f035d`
+   (bundle scan, CI job, the two earned migrations, and the aligned doc counts),
+   plus this documentation commit; the parked business work still exists as
+   `0a67b69` on `wip/phase05-business-features`. The **resurrected, repaired,
+   gate-green Phase 4 tree exists only as uncommitted working-tree changes** until
+   the owner approves a commit, so it has no history entry and no off-machine
+   copy. There is **no remote push and no CI run** anywhere in this repository, so
+   none of the above has a second copy. The phase split is a file grouping — only
    the final tree was gate-verified, and shared files whose content spans both
    phases ride in `b6bbea1`.
 6. **`docs/ENGINEERING_CONSTITUTION.md` missing:** the Phase 0 pack references it;
@@ -213,25 +243,30 @@ become a comparison against the owner's unfiltered totals. Details:
    authored and verified offline; §8 of the operator procedure applies them.
 5. **#36** Supabase Storage adoption for logos (the policies already exist).
 6. **04.5c** shadcn/ui for new UI → **04.5d** offline design → **04.5e**
-   DPO/eTIMS design → **Phase 05 resumes** only when the gate opens; the Phase 03/05
-   code waiting on `wip/phase05-business-features` is the starting point, and the
-   Phase 3 gap table in `implementation/phase-01-security-harness-report.md` §8
-   lists what is genuinely missing.
+   DPO/eTIMS design. The Phase 05/Phase 4 document work is now in the tree under
+   the owner's _"Directive opens the gate"_ decision; the gate note above is a
+   direction about the deployed database, not about missing tests, and #38 still
+   has to land before any of it is enforced by RLS. `phase-05-documents-report.md`
+   §7 is the list of what the business layer still lacks (tax picker, draft
+   editing, portal UI, PDF render proofs, list/create i18n), and the Phase 3 gap
+   table in `implementation/phase-01-security-harness-report.md` §8 lists what is
+   genuinely missing in authorization coverage.
 
 ## Documentation map
 
-| Document                                                   | Purpose                                                                                                                                                                                        |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RUNBOOK.md`                                               | Operations: env vars, the two DB connections, RLS activation, verification, migration rules, incident response                                                                                 |
-| `implementation/phase-checklist.md`                        | Phase plan, gates, env vars, next action                                                                                                                                                       |
-| `implementation/phase-00-repository-audit.md`              | Phase 0 audit                                                                                                                                                                                  |
-| `implementation/phase-01-foundation-report.md`             | Foundation execution record                                                                                                                                                                    |
-| `implementation/phase-01-security-harness-report.md`       | DB-backed authorization proofs (#37a–#37d), the findings and the migrations they earned, and the Phase 3 gap table                                                                             |
-| `administration/rls-activation-operator-procedure.md`      | #38 step by step: credential rotation, the `amisibiz_app` password, `APP_DATABASE_URL`, enforcement proof, the three pending migrations, post-apply probes, stop conditions — **not executed** |
-| `administration/provider-console.md`                       | How to run the provider console (Phase 2)                                                                                                                                                      |
-| `implementation/phase-01-security-design.md`               | Phase 1 authorization/RLS design                                                                                                                                                               |
-| `implementation/phase-04.5b-monorepo-and-clients-audit.md` | Monorepo/client audit + risk register                                                                                                                                                          |
-| `implementation/phase-04.5-constitution-alignment.md`      | 04.5a execution record                                                                                                                                                                         |
-| `architecture/security-model.md`                           | Trust boundaries, threat model, §13 Phase 1 status                                                                                                                                             |
-| `architecture/permission-matrix.md`                        | Roles, permission catalog, enforcement layers                                                                                                                                                  |
-| `architecture/system-design.md`                            | Architecture canon                                                                                                                                                                             |
+| Document                                                   | Purpose                                                                                                                                                                                                  |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RUNBOOK.md`                                               | Operations: env vars, the two DB connections, RLS activation, verification, migration rules, incident response                                                                                           |
+| `implementation/phase-checklist.md`                        | Phase plan, gates, env vars, next action                                                                                                                                                                 |
+| `implementation/phase-00-repository-audit.md`              | Phase 0 audit                                                                                                                                                                                            |
+| `implementation/phase-01-foundation-report.md`             | Foundation execution record                                                                                                                                                                              |
+| `implementation/phase-01-security-harness-report.md`       | DB-backed authorization proofs (#37a–#37d), the findings and the migrations they earned, and the Phase 3 gap table                                                                                       |
+| `implementation/phase-05-documents-report.md`              | Phase 4 directive (quotations, invoices, delivery notes): what is in the tree, the money and issuance rules, the acceptance mapping, the gate numbers, and the product gaps — **not a completion claim** |
+| `administration/rls-activation-operator-procedure.md`      | #38 step by step: credential rotation, the `amisibiz_app` password, `APP_DATABASE_URL`, enforcement proof, the three pending migrations, post-apply probes, stop conditions — **not executed**           |
+| `administration/provider-console.md`                       | How to run the provider console (Phase 2)                                                                                                                                                                |
+| `implementation/phase-01-security-design.md`               | Phase 1 authorization/RLS design                                                                                                                                                                         |
+| `implementation/phase-04.5b-monorepo-and-clients-audit.md` | Monorepo/client audit + risk register                                                                                                                                                                    |
+| `implementation/phase-04.5-constitution-alignment.md`      | 04.5a execution record                                                                                                                                                                                   |
+| `architecture/security-model.md`                           | Trust boundaries, threat model, §13 Phase 1 status                                                                                                                                                       |
+| `architecture/permission-matrix.md`                        | Roles, permission catalog, enforcement layers                                                                                                                                                            |
+| `architecture/system-design.md`                            | Architecture canon                                                                                                                                                                                       |

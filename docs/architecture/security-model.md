@@ -579,12 +579,18 @@ RLS stays inert. The findings above are **fixed in the repository** but **not
 applied to the live project**, which remains at migration 10. The document-UI work
 that arrived untracked after the last green gate run, which did not compile, was
 **parked off `main`** on 2026-10-15 by owner decision (task #52; branch
-`wip/phase05-business-features`, commit `0a67b69`), so `main` is the verified tree
-and these proofs now run on the same tree the ordinary gates pass on. Business
-feature work — Phase 05 tasks #11–#15 and the newly received Phase 3 pack —
-therefore remains gated by the directive, and by direction rather than by missing
-tests: _"Do not begin business feature development until the core authorization and
-RLS tests pass."_ The Phase 3 gap assessment lives in
+`wip/phase05-business-features`, commit `0a67b69`) and then **brought back and
+repaired** under the owner's Phase 4 directive (tasks #53/#54) — the gate opened
+_by direction_, not because #37 and #38 closed, so the document code compiles and
+passes every repository gate while the database enforcement that would make its
+authorization claims live-enforced is still inert.
+Business feature work — Phase 05 tasks #11–#15 and the newly received Phase 3 pack —
+is therefore proceeding **ahead of the directive's gate by explicit owner
+instruction**: _"Do not begin business feature development until the core
+authorization and RLS tests pass."_ is satisfied on the repository half only. Every
+document-layer proof in `docs/implementation/phase-05-documents-report.md` is an
+application-layer plus throwaway-database proof, and none of it is live-verified.
+The Phase 3 gap assessment lives in
 `docs/implementation/phase-01-security-harness-report.md` §8.
 
 ### 13.8 Proof 8 automation (#37c) and the CI security job (#37d)

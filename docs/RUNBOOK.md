@@ -158,9 +158,12 @@ required cross-tenant proofs (Phase 1 directive) live in the DB-backed harness,
 `pnpm test:run` alone still does not mean "RLS verified". Run it explicitly
 against a disposable database (see §4.3 and §5):
 
-```
+```sh
+# from the repository root — note `exec`: `pnpm --filter @amisibiz/web vitest run …`
+# fails with ERR_PNPM_RECURSIVE_RUN_NO_SCRIPT because there is no `vitest` script
+# to forward to. `127.0.0.1`, not `localhost`: see the dual-listener trap in §4.3.
 TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55499/<freshdb> \
-  pnpm --filter @amisibiz/web vitest run tests/integration-security.test.ts
+  pnpm --filter @amisibiz/web exec vitest run tests/integration-security.test.ts
 ```
 
 The harness refuses any URL that looks like the shared Supabase project, migrates
@@ -376,20 +379,28 @@ repository alone, and the CI job that runs them automatically (#37d) now exists 
 `.github/workflows/ci.yml` and has been rehearsed step by step locally — what is
 still missing is an actual GitHub Actions run, because nothing has been pushed.
 
-**Migration 12 is not on `main`.** `20261020000000_phase05_portal_linkage`
-(`Contact.portalUserId`, an FK to `User` with `ON DELETE SET NULL`, a unique index
-on `(tenantId, portalUserId)`) was found in the working tree as untracked
-business-feature work, never reviewed, never applied anywhere and never
-gate-verified. On 2026-10-15 the owner directed that it be parked rather than
-merged: it now exists only on branch `wip/phase05-business-features` (commit
-`0a67b69`), together with the document UI that does not compile. `main` therefore
-carries the Phase 1–2 chain plus the two Phase 1 gate migrations
-`20261021000000`/`20261021000001`, and its chain run reports
-78 · 71 + SKIP · 71 + SKIP · 55 · 72 PASS with step 13 doing real work.
+**Migration 12 is in the working tree, not on `main`'s HEAD, and not applied
+anywhere shared.** `20261020000000_phase05_portal_linkage` (`Contact.portalUserId`,
+an FK to `User` with `ON DELETE SET NULL`, a unique index on `(tenantId,
+portalUserId)`) was found untracked, parked by the owner on
+`wip/phase05-business-features` (`0a67b69`, task #52), and then **brought back with
+the rest of the document work under the Phase 4 directive** (2026-10-15, tasks
+#53/#54). It is clean-room verified but **uncommitted**, so treat it as pending
+until it lands in history, and it is still **not applied to the live project** —
+the shared database stays at 10 migrations until #38 and the owner-gated sequence
+(#38 → 11 → #37) run. `main`'s HEAD carries the Phase 1–2 chain plus the two Phase
+1 gate migrations `20261021000000`/`20261021000001`.
+
+Because migration 12 is now in the tree, step 13 has real work again: the chain on
+the current tree prints **78 · 71 + SKIP · 71 + SKIP · 55 · 72 PASS, 0 FAIL**,
+applying `20261020000000` → `20261021000000` → `20261021000001` in deploy order.
+Each number is the battery's PASS-line count; the two SKIPs are `T9j`, which keeps
+its label until the fencing migration (`20261021000000`) has been applied.
 
 Two things to keep straight about that branch. First, its contents are a parking
-record, not an approval — reopening it is a gate decision, not a coding decision.
-Second, when a migration directory newer than 11 _is_ in the tree, the driver's
+record, not an approval — and the code came back from it by the owner's direction
+on 2026-10-15, not by anyone deciding the gate had opened itself. Second, when a
+migration directory newer than 11 _is_ in the tree, the driver's
 step 13 applies it and re-runs the Phase 1 battery; that is how two apparent
 battery FAILs (`T2L-a`/`T2L-b`) were traced to fixture ordering left behind by
 step 12 rather than to any policy change. A future run that reaches migration 12
