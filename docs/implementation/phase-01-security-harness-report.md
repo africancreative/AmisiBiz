@@ -113,6 +113,39 @@ has_support_grant(p_tenant_id)` without also requiring
 | live Supabase project                                                                           | **untouched** — 10 applied, 11 pending, zero business data, no probe run      |
 | CI on GitHub                                                                                    | **never executed** (nothing pushed)                                           |
 
+Those two rows describe the **working tree as it stood during the work**, which
+included a body of untracked Phase 03/05 business code. After the owner's decision
+on that code (§5.1) the same commands were re-run on `main` and the numbers moved,
+because the business test suites and their type errors left the tree with it:
+
+| Command on `main` after parking                                                    | Result                                                                                     |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `pnpm turbo run lint type-check test:run --force`                                  | 17/17 tasks successful, **256 passed / 25 skipped** (10 files passed, 1 skipped), 0 errors |
+| `pnpm build`                                                                       | green (exit 0)                                                                             |
+| `pnpm format:check`                                                                | green                                                                                      |
+| `TEST_DATABASE_URL=… vitest run tests/integration-security.test.ts` on `p37_main1` | **25 passed** — re-verified against `main`'s schema, i.e. migrations 1–11 without 12       |
+| `sh scripts/db/cleanroom-chain.sh p37_main2`                                       | 78 · 67 · 67 · 55 · 67 PASS, **0 FAIL**; step 13 finds no later migration and steps down   |
+
+`apps/web/.next` was deleted once in that sequence: `tsc` was reporting nine
+errors from stale route-type files for API routes that only exist on the parked
+branch, not from any tracked source.
+
+### 5.1 The business-feature tree was parked, not merged
+
+The owner chose _move it off main_ for the untracked Phase 03/05 body (task #52).
+It now lives on branch `wip/phase05-business-features` as commit `0a67b69`, a
+56-file parking record covering the document services, PDF writer, calculations,
+numbering and snapshot builder, the document/dashboard UI, the portal and platform
+logo routes, three business test suites, `schema.prisma`'s portal-linkage change
+and migration `20261020000000_phase05_portal_linkage`.
+
+That commit is explicitly labelled a parking record, not an approval: the code does
+not compile (`document-detail-client` is imported by `documents/[id]/page.tsx` and
+exists nowhere in the repository), it has never passed a gate, and the live project
+has never seen migration 12. Landing it on `main` requires an owner waiver of the
+Phase 1 directive **and** a full green gate run over corrected code. `main` is now
+the verified tree — which is what makes the table above trustworthy.
+
 ## 6. Why the gate still holds
 
 The harness proves the **schema**. It does not prove the **deployed app**, because
@@ -120,14 +153,14 @@ The harness proves the **schema**. It does not prove the **deployed app**, becau
 application would connect as the owner, which bypasses RLS entirely. That is task
 #38, it is owner-gated, and no amount of local green changes it. On top of that,
 proof 8 has no automated check (#37c), nothing runs any of this on a push (#37d),
-the two §4 findings are unfixed, and the repository cannot pass `type-check` or
-`build` while the untracked Phase 05 code is in the tree.
+and the two §4 findings are unfixed.
 
-So the accurate statement is: _the core authorization and RLS tests now exist and
-pass against a real database; the directive's gate is not yet met, because the
-verification that reaches production is #38 and the business code that would pass
-through the gate does not compile._ The decision on Phase 05 / Phase 3 work is the
-owner's, recorded as task #52.
+So the accurate statement is: _the core authorization and RLS tests now exist, they
+pass against a real database on the same tree the gates are green on, and the
+directive's gate is still not met, because the verification that reaches production
+is #38._ The owner's direction for this cycle is to hold the gate: finish the
+repository-side work (#37c, #37d, the two owed migrations #50/#51) and hand over
+the #38 operator procedure, rather than open Phase 3–8 business work.
 
 ## 7. Next, in order
 
@@ -136,7 +169,34 @@ owner's, recorded as task #52.
    the owner's go-ahead**. Rotate the credential block pasted into chat earlier.
 2. **Apply migration 11** to the live project once #38 is green; it then joins the
    frozen set.
-3. **#37c** bundle scan (#48) and **#37d** CI Postgres service (#49).
-4. **#50/#51** the two follow-up migrations this harness earned.
-5. **#52** owner decision on the untracked Phase 05 code, then the Phase 3 gap
-   table, then the remaining phases toward the MVP.
+3. **#37c** bundle scan (#48) and **#37d** CI Postgres service (#49) — repository
+   work the owner has directed for this cycle.
+4. **#50/#51** the two follow-up migrations this harness earned, authored and
+   verified on a throwaway cluster; applying any SQL to the live project stays
+   owner-gated.
+5. **#38 operator runbook** written out step by step so it can be executed by the
+   operator or authorized explicitly.
+6. **#52 is closed** (2026-10-15): the business-feature tree is parked on
+   `wip/phase05-business-features`. Reopening Phase 3–8 work — the gap table in
+   §8 — is a gate decision, not a coding decision.
+
+## 8. Phase 3 gap table, as verified against the parked tree
+
+Recorded so the eventual gate decision is informed rather than guessed. Phase 3
+("business workspace, CRM and items") is largely already delivered; the gaps are
+small and mostly schema. All of it is gated while the directive stands.
+
+| Requirement                                                        | State                | Gap                                                                                                                        |
+| ------------------------------------------------------------------ | -------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Dashboard overview, recent documents, outstanding, counts, account | Implemented (branch) | `server/actions/dashboard.ts` + `components/dashboard/`; outstanding does not yet net payments applied                     |
+| Quick document creation                                            | Partial              | dashboard links to lists only; the `/documents/new` target does not compile                                                |
+| Empty states and validation errors                                 | Partial              | present everywhere except the broken document UI                                                                           |
+| CRM fields, archive, search, pagination, create/view/edit          | Implemented          | —                                                                                                                          |
+| KRA PIN **or business registration information**                   | Partial              | `taxPin` exists; there is **no business-registration-number field anywhere** — schema + validation + UI                    |
+| Internal notes invisible to portal users                           | Implemented          | portal seat holds 2 permissions; `Contact.notes` never selected on a portal path; DB-backed proof in the harness           |
+| Items catalogue with exact decimals and dual validation            | Implemented          | —                                                                                                                          |
+| `contact_items` customer code/description/price/discount           | Partial              | **no unit-of-measure column and no validity dates** (`validFrom`/`validTo`) — a migration, not UI work                     |
+| Cross-tenant relationship prevention                               | Implemented          | FKs + `@@unique([tenantId, contactId, itemId])` + single-tenant trigger + server-side re-check of both sides               |
+| Catalogue → line snapshot (copy, never recalculate)                | Implemented          | `catalogue-line.ts` → `documents/lines.ts`; issued columns frozen                                                          |
+| SQLite-ready repository ports                                      | Partial              | ports exist, **no adapter implements them**; `apps/web` calls Prisma directly                                              |
+| Tests for the above                                                | Partial              | search/pagination/relationship-integrity/permissions are mocked-Prisma only; no DB-backed test for `ContactItem` integrity |

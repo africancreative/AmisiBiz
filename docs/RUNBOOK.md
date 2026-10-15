@@ -297,14 +297,24 @@ fixture are now **tracked files**, so the procedure above reproduces from the
 repository alone; what is still missing is the CI job that runs them
 automatically (task #37d).
 
-**Migration 12 (`20261020000000_phase05_portal_linkage`) is a different case.** It
-exists only in an untracked working-tree directory — `Contact.portalUserId`, an
-FK to `User` with `ON DELETE SET NULL`, and a unique index on
-`(tenantId, portalUserId)` — it has never been reviewed, applied anywhere, or
-carried through the gates, and it belongs to the business-feature work the Phase 1
-gate blocks. The driver applies it in step 13 _because it is in the tree_, which
-is exactly how the two battery FAILs it surfaced were traced to fixture ordering
-rather than policy. Do not treat its presence as approval to deploy it.
+**Migration 12 is not on `main`.** `20261020000000_phase05_portal_linkage`
+(`Contact.portalUserId`, an FK to `User` with `ON DELETE SET NULL`, a unique index
+on `(tenantId, portalUserId)`) was found in the working tree as untracked
+business-feature work, never reviewed, never applied anywhere and never
+gate-verified. On 2026-10-15 the owner directed that it be parked rather than
+merged: it now exists only on branch `wip/phase05-business-features` (commit
+`0a67b69`), together with the document UI that does not compile. `main` therefore
+carries migrations 1–11 and its chain run reports 78 · 67 · 67 · 55 · 67 PASS with
+step 13 stepping down as a no-op.
+
+Two things to keep straight about that branch. First, its contents are a parking
+record, not an approval — reopening it is a gate decision, not a coding decision.
+Second, when a migration directory newer than 11 _is_ in the tree, the driver's
+step 13 applies it and re-runs the Phase 1 battery; that is how two apparent
+battery FAILs (`T2L-a`/`T2L-b`) were traced to fixture ordering left behind by
+step 12 rather than to any policy change. A future run that reaches migration 12
+should read `phase-01-security-harness-report.md` §4 before believing either
+number.
 
 Read migration 11's own header before deploying it: it stops with a message if a
 workspace already carries a non-UUID plan reference, and that refusal is the

@@ -549,12 +549,16 @@ Gate status: the repository half of #37 is met — the proofs above run from tra
 files against a real PostgreSQL, and nothing was loosened to make a case pass. The
 gate itself still binds, because the other half is operational: with no
 `amisibiz_app` password (task #38) the deployed app would connect as the owner and
-RLS stays inert, the two findings above are unfixed, and the document-UI work that
-arrived after the last green gate run does not compile (see the risks list in
-`docs/IMPLEMENTATION_STATUS.md`). Business feature work — Phase 05 tasks #11–#15
-and the newly received Phase 3 pack — therefore remains gated by the directive:
-_"Do not begin business feature development until the core authorization and RLS
-tests pass."_
+RLS stays inert, and the findings above are unfixed. The document-UI work that
+arrived untracked after the last green gate run, which did not compile, was
+**parked off `main`** on 2026-10-15 by owner decision (task #52; branch
+`wip/phase05-business-features`, commit `0a67b69`), so `main` is the verified tree
+and these proofs now run on the same tree the ordinary gates pass on. Business
+feature work — Phase 05 tasks #11–#15 and the newly received Phase 3 pack —
+therefore remains gated by the directive, and by direction rather than by missing
+tests: _"Do not begin business feature development until the core authorization and
+RLS tests pass."_ The Phase 3 gap assessment lives in
+`docs/implementation/phase-01-security-harness-report.md` §8.
 
 ---
 
