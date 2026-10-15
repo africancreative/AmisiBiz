@@ -1,7 +1,7 @@
 # AmisiBiz — Phased Implementation Checklist
 
-- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 04.5a (Supabase Auth swap) complete and deployed; Phase 05 documents schema + numbering deployed; **Phase 04.5b — Turborepo monorepo + shared packages + client shells + CI — complete (2026-10-14)**, executed as the owner-directed “Phase 1 — application foundation”; next: 04.5c (shadcn/ui for new UI), 04.5d/04.5e (offline + DPO/eTIMS design docs), then Phase 05 implementation resumes with the engine authored in `@amisibiz/documents`/packages. **Separately, the constitution's Phase 1 directive (core authorization, RBAC catalog and PostgreSQL RLS) is code-complete through task #35 (2026-10-14) but not yet live-verified — RLS stays inert until the operator step in `../RUNBOOK.md` §3, and Phase 05 work remains gated until the DB-backed proofs (#37) pass.**
-- **Companion docs:** `../IMPLEMENTATION_STATUS.md` (status dashboard), `phase-00-repository-audit.md` (Phase 0 audit — current), `../architecture/repository-audit.md` (historical), `../architecture/system-design.md`, `../architecture/security-model.md`, `phase-04-completion-report.md`, `phase-03.5-supabase-alignment-audit.md`, `phase-04.5b-monorepo-and-clients-audit.md`, `phase-01-foundation-report.md`, `phase-01-security-design.md` (Phase 1 directive design), `../RUNBOOK.md` (operations, RLS activation)
+- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 04.5a (Supabase Auth swap) complete and deployed; Phase 05 documents schema + numbering deployed; **Phase 04.5b — Turborepo monorepo + shared packages + client shells + CI — complete (2026-10-14)**, executed as the owner-directed “Phase 1 — application foundation”; next: 04.5c (shadcn/ui for new UI), 04.5d/04.5e (offline + DPO/eTIMS design docs), then Phase 05 implementation resumes with the engine authored in `@amisibiz/documents`/packages. **Separately, the constitution's Phase 1 directive (core authorization, RBAC catalog and PostgreSQL RLS) is code-complete through task #35 (2026-10-14) and now DB-proven: the integration harness runs 25 cases as `amisibiz_app` against a disposable PostgreSQL and passes, with the behavioral batteries and the clean-room driver committed (#37a/#37b, 2026-10-15 — `phase-01-security-harness-report.md`). It is still not live-verified: RLS stays inert until the operator step in `../RUNBOOK.md` §3 (#38), proofs #37c/#37d are open, and business feature work (Phase 05 tasks #11–#15, the Phase 3 pack) remains gated — the repository half of the gate is met, the operational half and a compilable tree are not.**
+- **Companion docs:** `../IMPLEMENTATION_STATUS.md` (status dashboard), `phase-00-repository-audit.md` (Phase 0 audit — current), `../architecture/repository-audit.md` (historical), `../architecture/system-design.md`, `../architecture/security-model.md`, `phase-04-completion-report.md`, `phase-03.5-supabase-alignment-audit.md`, `phase-04.5b-monorepo-and-clients-audit.md`, `phase-01-foundation-report.md`, `phase-01-security-design.md` (Phase 1 directive design), `phase-01-security-harness-report.md` (the DB-backed proofs, #37a/#37b), `../RUNBOOK.md` (operations, RLS activation)
 
 Rules: implement **one phase at a time**; do not start a phase whose dependencies are unmet; every phase ends with the verification suite below green and a completion report.
 
@@ -60,14 +60,20 @@ Rules: implement **one phase at a time**; do not start a phase whose dependencie
 `test:run`, `build` all green + phase-specific security tests. Coverage
 thresholds to be set in Phase 07.
 
-**Integration reality (2026-10-14):** the "integration" layer is **not yet
-running**. `apps/web/tests/integration-security.test.ts` exists but skips its 13
-tests unless `TEST_DATABASE_URL` is set, and no CI job provides Postgres — so
-every security assertion that is green today proves the application's decisions
-against a mocked Prisma, not PostgreSQL policy behaviour. Closing this is task
-#37 (harness + the eight required proofs + catalog parity + CI service), and the
-Phase 1 directive's gate ("no business feature work until the core authorization
-and RLS tests pass") stays shut until it does.
+**Integration reality (updated 2026-10-15):** the "integration" layer now **runs
+against a real database**. `apps/web/tests/integration-security.test.ts` is a DB-
+backed harness — 25 cases that build fixtures as the table owner, then assert
+inside `SET LOCAL ROLE amisibiz_app` — and it passes 25/25 against a disposable
+PostgreSQL; the behavioral battery, the legacy fixture and the clean-room chain
+driver are tracked files (`prisma/scripts/rls-behavior-battery.sql`,
+`prisma/scripts/fixtures/phase1-legacy-fixture.sql`,
+`scripts/db/cleanroom-chain.sh`), so the `.tmp/` scratch dependency is gone. It
+still self-skips when `TEST_DATABASE_URL` is unset, so a green `pnpm test:run` on
+a machine without a database proves nothing about policies. Remaining: no CI job
+provides Postgres (#37d) and no automated bundle scan (#37c). The Phase 1
+directive's gate ("no business feature work until the core authorization and RLS
+tests pass") therefore **still stays shut** — its other half is operational, not
+repository, and belongs to #38.
 
 **Integration-suite safety:** the DB-backed suites read `TEST_DATABASE_URL`
 and wipe tables between tests — they must point at a disposable database (the
@@ -245,6 +251,32 @@ migration.`) plus applying the chain to a throwaway local cluster.
 - **Depends on:** Phase 03 (settings).
 - **Report:** `phase-04-completion-report.md` (evidence, limitations, next phase).
 
+### Phase 03 brief — business workspace dashboard, line snapshot & offline ports ✅ IMPLEMENTED (application layer)
+
+The Phase-3 brief's CRM, item-catalogue and customer-catalogue requirements were
+already delivered inside Phase 04 (above); this entry records the remaining
+surface. Distinct from "Phase 03 — Tenant lifecycle" above.
+
+- **Delivered:** tenant business dashboard — `getDashboardOverviewAction`
+  (tenant-scoped under `documents.read`, grouped counts, exact decimal-string
+  outstanding totals) + `/[locale]/app` server-rendered overview with stat cards,
+  recent-documents feed, outstanding-invoice card, account/branding card, quick
+  actions and empty states; en/fr/sw catalogues. Exact text-based decimal
+  arithmetic (`@amisibiz/documents/decimal`); the pure catalogue→document-line
+  snapshot builder (`buildDocumentLineSnapshot`, copies item details/price, applies
+  an available customer override, never recomputes an existing line); and the
+  tenant-scoped repository ports for a future SQLite/offline adapter
+  (`@amisibiz/domain/repositories`).
+- **Tests:** `tests/phase03-dashboard-catalogue.test.ts` (23) — dashboard
+  authorization/scoping/arithmetic, snapshot immutability, exact decimal maths,
+  and an in-memory implementation of all three ports. Suite total **279 passed /
+  13 skipped**; lint/type-check/build green.
+- **Honest limits:** not browser-exercised; the snapshot builder is not yet wired
+  into an issuing action (Phase 05 is gated); "outstanding" is
+  invoiced-not-yet-settled (no payment netting until Phase 05); RLS still inert.
+- **Report:** `phase-03-business-workspace-dashboard-report.md`.
+- **Depends on:** Phase 04 (CRM/catalogue).
+
 ### Phase 03.5 — Supabase alignment & tenant-provisioning audit ✅ COMPLETE
 
 - **Delivered:** audit report `phase-03.5-supabase-alignment-audit.md`;
@@ -356,9 +388,12 @@ record: `phase-01-security-design.md`; enforcement status:
 - **Not done (do not describe this phase as complete):**
   - **#38** operator step — `amisibiz_app` still has no password, so the runtime
     cannot connect as the role the policies were written for. **RLS is inert.**
-  - **#37** DB-backed integration harness running the eight required proofs as
-    `amisibiz_app`, code↔database catalog parity, CI Postgres service, and the
-    behavioral battery committed rather than left in scratch files.
+  - **#37** — partly closed (2026-10-15). The DB-backed harness now runs the eight
+    required proofs as `amisibiz_app` against a disposable PostgreSQL, the
+    code↔database catalog and matrix parity is one of its cases, and the
+    behavioral battery is committed rather than left in scratch files. Still open
+    inside #37: the automated bundle scan (#37c) and the CI Postgres service
+    (#37d).
   - **#36** Supabase Storage adoption (policies exist; the app still uses
     `/uploads`).
 - **Gate this phase imposes:** _"Do not begin business feature development until
@@ -433,30 +468,64 @@ planId uuid`, Phase 2 battery **55 PASS**, Phase 1 battery **67 PASS** as
 - **Gate unchanged:** the Phase 1 directive still closes business feature work —
   Phase 05 (#11–#15) stays shut until #37 and #38 pass.
 
-### Phase 05 — Documents & PDF generation (IN PROGRESS — paused for 04.5)
+### Phase 05 — Documents & PDF generation ✅ COMPLETE (application layer; live verification pending)
 
-- **Delivered (schema layer, applied via `20261015000000`):** `Document`
+- **Brief reconciliation:** this checklist line previously read "Documents &
+  PDF generation". The brief's Phase 4 sections (quotations, invoices, delivery
+  notes, numbering/issuance, payments, branding/PDF, customer portal, eTIMS
+  boundary) were implemented together as Phase 05.
+- **Delivered (schema layer, `20261015000000`, pre-existing):** `Document`
   (+ line/payment/status-event tables) with tenant-scoped unique numbers,
   issuance snapshots + immutability triggers, totals-identity CHECKs,
   status-per-type CHECKs, `idempotencyKey`, and
   `allocate_document_number()` (per-tenant/type/period counters under
   `FOR UPDATE`) plus `DocumentNumbering`/`DocumentNumberSequence`; the 23-check
-  migration suite and `prisma/scripts/phase05-numbering-concurrency.sql`;
-  read-only server actions (`getDocumentsAction`, `getDocumentAction`).
-- **Remaining:** calculation engine + numbering service
-  (`src/server/services/documents/**`); create/update/issue/void/payment/
-  conversion server actions + lifecycle state machine; tenant-branded PDF
-  renderer + download route; `/app/documents` UI + i18n; Phase 05 tests, gate
-  and completion report.
+  migration suite and `prisma/scripts/phase05-numbering-concurrency.sql`.
+- **Delivered (engine):** the pure shared engine in `@amisibiz/documents` —
+  exact decimal-string arithmetic (`decimal.ts`), line/document calculations
+  (`calculations.ts`), the lifecycle state machine + `deriveInvoiceStatus` /
+  `deriveDeliveryStatus` (`lifecycle.ts`), number composition/preview
+  (`numbering.ts`), snapshot build/read (`snapshot.ts`) and the dependency-free
+  A4 `renderDocumentPdf` (`pdf-writer.ts`). The server services
+  (`apps/web/src/server/services/documents/**`) wrap it with Prisma + auth:
+  `createDraft`, `updateDraft`, `issueDocument`, `voidInvoice`,
+  `recordQuotationDecision`, `convertQuotationToInvoice`,
+  `createDeliveryNoteFromDocument`, `recordDelivery`, `recordPayment`,
+  `reversePayment`, `createReplacementDraft`, `getDocumentWithLines`.
+- **Delivered (actions, validation, routes):**
+  `apps/web/src/lib/validations/document-write.ts`; the full read + write surface
+  in `apps/web/src/server/actions/document.ts` (permission chosen from the
+  document's **stored** type via `authorizeByDocumentType`);
+  `GET /api/documents/[documentId]/pdf` (`documents.download`) and
+  `GET /api/portal/documents/[documentId]/pdf` (`portal.documents.*`, contact-
+  scoped by a `contactId` predicate in the query).
+- **Delivered (customer portal linkage, `20261020000000`):**
+  `Contact.portalUserId` (nullable FK → `User`) + `@@unique([tenantId,
+portalUserId])`, so a `CUSTOMER_PORTAL_USER` maps to at most one contact per
+  tenant. Authored, **not applied** — see limitations.
+- **Delivered (tests):** `tests/phase05-documents.test.ts` (46) covering
+  arithmetic precision, rounding, derived status, immutable snapshots,
+  corrections, quotation conversion (including the retry), numbering, PDF
+  output and both routes' authorization/cross-tenant behaviour. Suite total
+  **337 passed / 13 skipped** (was 291 before this phase).
+- **Delivered (UI + i18n):** the `/app/documents` list, the new-document form
+  and the document detail page with the frozen-snapshot preview, status history,
+  payments, and the lifecycle actions, plus PDF preview/download; en/fr/sw
+  catalogues.
 - **Acceptance:** unique tenant-scoped numbers; immutable issued snapshots;
   controlled correction/voiding/replacement; audited transitions; a commercial
   PDF is never presented as a KRA/eTIMS-compliant tax invoice (eTIMS remains a
-  separate future integration).
+  separate future integration). Met at the application layer.
+- **Limitations (do not read as live-verified):** `20261020000000` is unapplied
+  to the shared project (owner-gated); RLS is still inert (#38) and Storage is
+  still #36; the PDF writer is a hand-rolled A4 renderer without full script
+  shaping; currency is KES-only; the UI was not browser-exercised; concurrent
+  numbering is a database guarantee proved by the SQL script, not the mock suite.
 - **Note:** the old "Phase 05 — Catalogue" slot was absorbed by the expanded
   Phase 04; leftover ideas (price lists, catalogue import, bulk price edits)
-  are optional extras without a phase number. Implementation must not resume
-  until Phase 04.5 has aligned the existing code.
+  are optional extras without a phase number.
 - **Depends on:** Phase 04 + Phase 04.5.
+- **Report:** `phase-05-documents-report.md`.
 
 ### Phase 06 — ⤵ merged into Phase 05
 
@@ -594,12 +663,16 @@ no remote push — task #30 closed by the owner's two-commit approval):**
    `pnpm db:assert-rls`. It aborts loudly if any `Tenant.planId` still holds a
    legacy text label — an operator resolves the row, never the migration file.
    Once applied, migration 11 is frozen like 1–10.
-3. **#37 — DB-backed integration harness:** run the eight required proofs against
-   a disposable PostgreSQL as `amisibiz_app`, add the code↔database catalog parity
-   test, wire a Postgres service into CI, and commit the behavioral RLS battery
-   that currently exists only as scratch files — including
-   `prisma/scripts/phase02-migration-checks.sql` and the Phase 2 provider cases
-   whose chain drivers still live in the git-ignored `.tmp/`.
+3. **#37 remainder — what is actually left:** the harness and both batteries are
+   committed and green against a disposable PostgreSQL as `amisibiz_app`
+   (`tests/integration-security.test.ts`, `prisma/scripts/rls-behavior-battery.sql`,
+   `prisma/scripts/phase02-migration-checks.sql`, driven end-to-end by
+   `scripts/db/cleanroom-chain.sh`). Open: an automated client-bundle secret scan
+   (#37c, proof 8) and a CI job with a Postgres service that runs the harness plus
+   both batteries on every push (#37d). Two follow-up migrations are owed by the
+   findings in `../architecture/security-model.md` §13.7 — tighten the
+   `has_tenant_read_access` support branch, and convert the support/invitation
+   window columns to `timestamp(3) WITH TIME ZONE`.
 4. **#36 — Supabase Storage adoption** for logos (bucket + object policies exist
    in migration 10; the app still writes to `/uploads`).
 5. **04.5c → 04.5d → 04.5e → Phase 05 resumes.** The directive's gate holds:

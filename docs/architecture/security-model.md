@@ -458,38 +458,103 @@ storage isolation claim is schema-only.
 
 ### 13.6 The eight required proofs — honest status
 
-| #   | Required proof                                                 | Where it is decided                                                                           | Evidence today                                                                                                   |
-| --- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| 1   | An anonymous caller cannot reach private tenant data           | No `anon`/`authenticated` privileges on AmisiBiz tables + middleware gate                     | grants in migration 10 (offline); **not** exercised live                                                         |
-| 2   | Tenant A cannot read Tenant B                                  | `has_tenant_read_access` + `where: { tenantId }`                                              | offline scratch battery (67 assertions) and `integration-security.test.ts` (skipped without `TEST_DATABASE_URL`) |
-| 3   | Tenant A cannot mutate Tenant B                                | `has_tenant_write_access` (no support branch)                                                 | same as #2                                                                                                       |
-| 4   | A viewer cannot issue documents                                | matrix (`documents.*.issue` absent for `VIEWER`) + `authorizeTenant`                          | unit tests (mocked Prisma); the issuance flow itself is Phase 05 work                                            |
-| 5   | A portal user cannot access internal business records          | `CUSTOMER_PORTAL_USER` holds 2 permissions; portal scoping                                    | unit assertion of the permission set; record-level portal filtering **unproven**                                 |
-| 6   | Users cannot elevate their own role                            | `users_guard_update`, `tenant_members_guard_role_change`, `platformRole` not self-serviceable | offline battery; DB-enforced, not merely app-enforced                                                            |
-| 7   | Tenant ids cannot be manipulated to bypass RLS                 | claims are re-derived from rows by `SECURITY DEFINER` helpers                                 | offline battery; `ScopeNotSetError` fail-closed path unit-tested                                                 |
-| 8   | Privileged database credentials are absent from client bundles | only `NEXT_PUBLIC_*` may reach the client; `SUPABASE_SECRET_KEY` is server-only               | by construction + review; **no automated bundle scan exists**                                                    |
-| —   | Storage policies prevent cross-tenant logo access              | `storage.objects` policies                                                                    | schema only — see §13.5                                                                                          |
+The DB-backed harness is `apps/web/tests/integration-security.test.ts`: it
+connects as the table owner only to build fixtures, then runs every assertion
+inside `SET LOCAL ROLE amisibiz_app` with `public.set_tenant_context(...)`, so
+what it measures is the policy, not a Prisma `where` clause. It is skipped when
+`TEST_DATABASE_URL` is unset and refuses any host that looks like the shared
+Supabase project.
 
-**What is missing to call Phase 1 done:** a committed, CI-wired DB-backed
-harness that runs #2, #3, #5, #6, #7 against a real PostgreSQL as
-`amisibiz_app` (task #37), a code↔database permission-catalog parity test, an
-automated bundle check for #8, and the operator step that makes any of it true
-for the deployed app (task #38).
+| #   | Required proof                                                 | Where it is decided                                                                           | Evidence today                                                                                                                                                                    |
+| --- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | An anonymous caller cannot reach private tenant data           | No `anon`/`authenticated` privileges on AmisiBiz tables + middleware gate                     | harness case asserts zero table privileges for those roles when they exist (a vanilla CI PostgreSQL may not have them); **not** yet exercised against the live project            |
+| 2   | Tenant A cannot read Tenant B                                  | `has_tenant_read_access` + `where: { tenantId }`                                              | harness: own rows only, and with no context every tenant-scoped table reads zero; the visible `Tenant` row is the caller's own membership (by design, §13.7)                      |
+| 3   | Tenant A cannot mutate Tenant B                                | `has_tenant_write_access` (no support branch) + the grants underneath it                      | harness: foreign UPDATE matches 0 rows, foreign INSERT violates `WITH CHECK`, and DELETE is refused before the policy even runs — the runtime role holds no DELETE grant          |
+| 4   | A viewer cannot issue documents                                | matrix (`documents.*.issue` absent for `VIEWER`) + `authorizeTenant`                          | harness proof 4: a VIEWER reads its workspace, cannot INSERT an `Item`, and its UPDATE matches 0 rows; the issuance flow itself is Phase 05 work                                  |
+| 5   | A portal user cannot access internal business records          | `CUSTOMER_PORTAL_USER` holds 2 permissions; portal scoping                                    | harness proof 5: a portal seat cannot write and reads zero `AuditLog` rows; portal document/PDF scoping is Phase 05 work                                                          |
+| 6   | Users cannot elevate their own role                            | `users_guard_update`, `tenant_members_guard_role_change`, `platformRole` not self-serviceable | harness proof 6: self-`platformRole` update raises `23514`, own-role escalation matches 0 rows, a suspended tenant cannot reactivate itself, an active tenant cannot self-suspend |
+| 7   | Tenant ids cannot be manipulated to bypass RLS                 | claims are re-derived from rows by `SECURITY DEFINER` helpers                                 | harness proof 7: forged `app.*` GUCs reveal and mutate nothing, a claimed platform-admin flag grants nothing, and `set_tenant_context` refuses a malformed uuid                   |
+| 8   | Privileged database credentials are absent from client bundles | only `NEXT_PUBLIC_*` may reach the client; `SUPABASE_SECRET_KEY` is server-only               | by construction + manual scan; **the automated bundle check is still open (task #37c)**                                                                                           |
+| —   | Storage policies prevent cross-tenant logo access              | `storage.objects` policies                                                                    | schema only — see §13.5                                                                                                                                                           |
 
-One evidence caveat worth stating plainly: the behavioral RLS battery that
-produced the "offline" results above (67 assertions, run against a throwaway
-local cluster) currently exists only as a git-ignored scratch file under `.tmp/`
-(committing the work did not commit that battery — that is task #37). The
-committed `apps/web/prisma/scripts/phase01-migration-checks.sql` covers the
-structural side (policies present, grants narrowed, helpers executable) with
-some role-switched checks, but the cross-tenant read/write behaviour is not yet
-reproducible from the repository alone. Folding that battery into the harness is
-part of #37 — until then those results cannot be re-run by anyone else, which is
-exactly why they are not reported as "passing".
+Plus the harness cases that are not among the eight but close the same gaps: the
+Phase 2 suspension split (reads preserved, writes denied, provider branch still
+allowed), the support-grant read path, `AuditLog` append-only by grant, least
+privilege over a table created after the migrations by a foreign application,
+code↔database permission-catalog and role→permission-matrix parity, and the
+role attributes of `amisibiz_app` itself.
 
-Until #37 and #38 land, business feature work (Phase 05, tasks #11–#15) stays
-gated by the directive: _"Do not begin business feature development until the
-core authorization and RLS tests pass."_
+**What is missing to call Phase 1 done:** the operator step that makes any of it
+true for the deployed app (task #38 — set the `amisibiz_app` password, publish
+`APP_DATABASE_URL`, run `pnpm db:assert-rls` and the live probes), the automated
+bundle check for #8, the CI job that runs the harness plus both behavioural
+batteries on every push (task #37d), and Supabase Storage adoption for logos
+(task #36).
+
+Reproducibility changed this cycle: the behavioral battery that used to live only
+in git-ignored `.tmp/` scratch files is now in the repository —
+`apps/web/prisma/scripts/rls-behavior-battery.sql` (67 assertions), its
+legacy-shape fixture `apps/web/prisma/scripts/fixtures/phase1-legacy-fixture.sql`
+and the end-to-end driver `scripts/db/cleanroom-chain.sh`, which rebuilds a
+database from nothing (migrations 1–7 → foreign-table PRE probe → fixture →
+8–10 → POST probes → batteries → migration-11 abort probe → 11 → regression
+battery → Phase 2 battery → any later migration in the tree, with the battery run
+again). One run of that driver against a throwaway cluster (`p37_chain3`,
+2026-10-15) produced 78 PASS / 0 FAIL structural checks, 67 PASS battery
+assertions, the expected abort from migration 11 on legacy `planId` text, 55 PASS
+Phase 2 checks, and 67 PASS again after the untracked migration 12.
+
+Extending the driver to migration 12 initially printed two FAILs
+(`T2L-a platform tenant visibility: 5 (expect 2)`, `T2L-b … 4 (expect 2)`). The
+cause was checked against the database, not assumed: the extra rows are the
+Phase 2 battery's own fixture tenants (`p2-active`, `p2-suspended`, `p2-pending`)
+and their contacts, which step 12 leaves behind before step 13 re-runs the Phase 1
+battery. Migration 12 changes no policy — it adds a column, a `SET NULL` FK and a
+unique index. The fix was to the _assertion_, never to a policy: T2L now snapshots
+the owner's unfiltered totals and requires the platform role to match them exactly,
+so "a SUPER_ADMIN sees every row" stays true (and still fails on one hidden or one
+over-reachable row) on a database carrying any amount of fixture residue.
+
+Two behaviours the harness found are recorded in §13.7 rather than quietly
+asserted away — no policy was changed to make a case pass.
+
+### 13.7 Findings from the first DB-backed harness run
+
+**Support access is fenced by the grant, not by the active context.**
+`has_tenant_read_access()` ORs in `is_platform_support() AND
+has_support_grant(p_tenant_id)` without also requiring `p_tenant_id =
+current_tenant_id()`. A SUPPORT user holding a grant on tenant A therefore reads
+A's rows even while the session claims tenant B. It is not a cross-tenant leak —
+B's rows stay invisible without a B grant — but it means a support session's
+tenant label is advisory at the row level, so an audit row written under one
+context can accompany reads of another. Tightening that branch (one added
+conjunction in a new migration) is the correct fix; it is deliberately **not**
+done here, because migrations 1–11 are frozen and the owner's gate sequence runs
+#38 → apply 11 → #37 before any further SQL ships.
+
+**`timestamp(3) WITHOUT TIME ZONE` window columns are session-timezone
+sensitive.** `SupportAccessGrant.expiresAt` and `Invitation.expiresAt` are naive
+timestamps while Prisma writes UTC instants and the policies compare against
+`now()`. On Supabase (server timezone UTC) the two agree; on a local cluster in
+`Africa/Nairobi` (+03) every window Prisma created looked three hours shorter,
+which is what first made the support-grant case read zero rows. The harness pins
+the disposable database's timezone to UTC in `beforeAll` so it measures the
+production posture; the underlying column type should become
+`timestamp(3) WITH TIME ZONE` in a follow-up migration so a non-UTC session can
+never shift a support or invitation window. Until then, anything that reads expiry
+against `now()` from a non-UTC connection is untrustworthy — including a
+developer laptop.
+
+Gate status: the repository half of #37 is met — the proofs above run from tracked
+files against a real PostgreSQL, and nothing was loosened to make a case pass. The
+gate itself still binds, because the other half is operational: with no
+`amisibiz_app` password (task #38) the deployed app would connect as the owner and
+RLS stays inert, the two findings above are unfixed, and the document-UI work that
+arrived after the last green gate run does not compile (see the risks list in
+`docs/IMPLEMENTATION_STATUS.md`). Business feature work — Phase 05 tasks #11–#15
+and the newly received Phase 3 pack — therefore remains gated by the directive:
+_"Do not begin business feature development until the core authorization and RLS
+tests pass."_
 
 ---
 

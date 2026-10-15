@@ -131,7 +131,7 @@ without one raises `ScopeNotSetError` instead of silently seeing everything.
 
 ## 4. Verification: what proves what
 
-### 4.1 Repository gates (mocked database; safe anywhere)
+### 4.1 Repository gates (safe anywhere; the database is mocked)
 
 ```
 pnpm format          # prettier --write
@@ -144,9 +144,22 @@ pnpm build           # next build
 These are the standing end-of-phase gate. They prove types, lint cleanliness,
 and that the authorization helpers behave correctly **against a mock**. They do
 not prove that PostgreSQL policies work: the mock never enforces anything. The
-required cross-tenant proofs (Phase 1 directive) belong to the DB-backed
-integration harness, which is still open — so until that lands, no gate here
-should be described as "RLS verified".
+required cross-tenant proofs (Phase 1 directive) live in the DB-backed harness,
+`apps/web/tests/integration-security.test.ts`, which the ordinary gate runs
+**skip** rather than fail when no database is configured — so a green
+`pnpm test:run` alone still does not mean "RLS verified". Run it explicitly
+against a disposable database (see §4.3 and §5):
+
+```
+TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55499/<freshdb> \
+  pnpm --filter @amisibiz/web vitest run tests/integration-security.test.ts
+```
+
+The harness refuses any URL that looks like the shared Supabase project, migrates
+the disposable database itself (pinning both `DATABASE_URL` and `DIRECT_URL`, §4.3
+trap), builds fixtures as the table owner and then runs every assertion inside
+`SET LOCAL ROLE amisibiz_app`. 25 cases currently pass; without
+`TEST_DATABASE_URL` the suite reports 25 skipped.
 
 ### 4.2 Live probes (touch a real project — get explicit go-ahead first)
 
@@ -161,7 +174,26 @@ port and sometimes the whole connection string.
 ### 4.3 Offline migration verification (scratch cluster — the mandatory path)
 
 New or edited migrations are verified on a throwaway local PostgreSQL cluster
-before any shared database is touched:
+before any shared database is touched. The whole chain is scripted and committed:
+
+```sh
+# throwaway cluster on a non-default port, trust auth (e.g. 55499)
+PGHOST=localhost PGPORT=55499 PGUSER=postgres sh scripts/db/cleanroom-chain.sh <db>
+```
+
+`scripts/db/cleanroom-chain.sh` drops and recreates `<db>`, applies migrations
+1–7, proves the PRE-remediation leak with a foreign table, loads
+`apps/web/prisma/scripts/fixtures/phase1-legacy-fixture.sql`, applies 8–10, runs
+the POST probes, then `phase01-migration-checks.sql` (78 PASS),
+`rls-behavior-battery.sql` as `amisibiz_app` (67 PASS), the migration-11 **abort**
+probe, migration 11 after an operator NULLs the legacy `planId`, the Phase 1
+battery again as the regression check on top of 11 (67 PASS),
+`phase02-migration-checks.sql` (55 PASS), and finally any migration newer than 11
+that exists in the tree with the battery re-run once more (67 PASS). Logs land in
+`.tmp/cleanroom_*`. It speaks raw `psql` rather than `prisma migrate deploy`
+precisely because of the `DIRECT_URL` trap below.
+
+The manual steps, if you need to do one in isolation:
 
 1. Fresh database → apply migrations 1–7 → add "pre-leak" evidence (a foreign
    table plus its sequence) → apply the legacy-shaped fixture → apply the Phase 1
@@ -173,7 +205,10 @@ before any shared database is touched:
    must print exactly `-- This is an empty migration.`
 4. Re-running a checks script against the same database produces spurious diffs
    (some scripts shim `DEFAULT now()` onto `updatedAt`); run each one once per
-   freshly migrated database.
+   freshly migrated database. `rls-behavior-battery.sql` is the exception — it is
+   written to be re-runnable (its purge block) and its platform-admin case
+   compares against the owner's unfiltered totals rather than a hard-coded count,
+   so it stays truthful on a database that also carries the Phase 2 fixtures.
 
 **The trap that makes step 4 and the URL pinning non-optional:**
 `prisma/schema.prisma` declares `directUrl = env("DIRECT_URL")`, and
@@ -229,38 +264,47 @@ anywhere shared**. Once it is deployed it joins the frozen set, and any later
 change becomes migration 12.
 
 Before it goes anywhere near the live project, carry a **throwaway** database
-through the whole chain (never the shared Supabase project — see §4 and the
-`DIRECT_URL` trap):
+through the whole chain with the committed driver (never the shared Supabase
+project — see §4.3 and the `DIRECT_URL` trap):
 
 ```sh
-# 0) throwaway cluster, trust auth, e.g. port 55499; createdb <scratch>
-# 1) apply migrations 1..10 in order with psql -1 -f .../migration.sql
-# 2) load legacy-shaped fixtures (text ids / old role labels) if you want the
-#    same pre-UUID path the live project took
-# 3) apply migration 11 twice: once with a legacy text `Tenant.planId` present
-#    (it must abort), once after NULLing those values (it must apply)
+PGHOST=localhost PGPORT=55499 PGUSER=postgres sh scripts/db/cleanroom-chain.sh <scratch>
+```
+
+The driver applies 1–10, loads the legacy fixture, then runs migration 11 **twice
+by design**: once with a legacy text `Tenant.planId` present (it must abort), once
+after the script NULLs those values (it must apply), and re-runs the Phase 1
+battery on top of it. The one-off equivalent, if you only need the abort probe:
+
+```sh
 MIG=apps/web/prisma/migrations
 psql -h localhost -p 55499 -U postgres -d <scratch> -v ON_ERROR_STOP=1 -1 \
      -f "$MIG/20261019000000_phase02_provider_administration_plans_and_suspension_gates/migration.sql"
-# 4) the committed behaviour battery, as the runtime role
-psql -h localhost -p 55499 -U postgres -d <scratch> -q \
-     -f apps/web/prisma/scripts/phase02-migration-checks.sql
 ```
 
 Expected: the abort probe refuses to convert a legacy text `planId` and leaves the
 database untouched (the file is one transaction); after an operator resolves the
 label it applies with `plans=1`, `permission catalog=42`, `role matrix=116`,
 `planId type=uuid`; the Phase 2 battery prints **55 PASS and no FAIL**; the Phase 1
-battery still prints **67 PASS and no FAIL** (it is the regression check on top of
-11); and `prisma migrate diff --from-url <scratch> --to-schema-datamodel
-prisma/schema.prisma` prints nothing but the probe fixture's
+battery still prints **67 PASS and no FAIL**, both before and after 11 (it is the
+regression check on top of 11); and `prisma migrate diff --from-url <scratch>
+--to-schema-datamodel prisma/schema.prisma` prints nothing but the probe fixture's
 `DROP TABLE "other_app_data"`.
 
-Evidence caveat to keep honest: the **chain driver** (`phase2_chain.sh`) and the
-Phase 1 battery live in `.tmp/`, which is git-ignored, so steps 1–3 above cannot be
-reproduced from the repository alone — only `phase02-migration-checks.sql` is
-committed. Folding the drivers and batteries into a CI-wired harness is task #37;
-until then, re-deriving this section is a manual operator task.
+Evidence caveat retired, one honest gap left: the chain driver
+(`scripts/db/cleanroom-chain.sh`), the Phase 1 behaviour battery, and the legacy
+fixture are now **tracked files**, so the procedure above reproduces from the
+repository alone; what is still missing is the CI job that runs them
+automatically (task #37d).
+
+**Migration 12 (`20261020000000_phase05_portal_linkage`) is a different case.** It
+exists only in an untracked working-tree directory — `Contact.portalUserId`, an
+FK to `User` with `ON DELETE SET NULL`, and a unique index on
+`(tenantId, portalUserId)` — it has never been reviewed, applied anywhere, or
+carried through the gates, and it belongs to the business-feature work the Phase 1
+gate blocks. The driver applies it in step 13 _because it is in the tree_, which
+is exactly how the two battery FAILs it surfaced were traced to fixture ordering
+rather than policy. Do not treat its presence as approval to deploy it.
 
 Read migration 11's own header before deploying it: it stops with a message if a
 workspace already carries a non-UUID plan reference, and that refusal is the
