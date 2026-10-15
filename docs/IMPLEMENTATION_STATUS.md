@@ -58,7 +58,7 @@
 - **Phase 05 (document engine/PDF/UI): gated.** The directive forbids business
   feature work until the core authorization and RLS tests pass in a real database
   harness. That harness now exists and passes (#37a/#37b, 2026-10-15:
-  `tests/integration-security.test.ts`, 25 cases as `amisibiz_app`, plus the
+  `tests/integration-security.test.ts`, 26 cases as `amisibiz_app`, plus the
   committed batteries and `scripts/db/cleanroom-chain.sh`), but the gate is not
   satisfied by it alone — #38, the operator step that makes RLS non-inert in the
   deployed app, is still open, so business feature work stays gated by direction
@@ -75,34 +75,34 @@
 
 ## Feature status
 
-| Area                               | Status                                                | Evidence / notes                                                                                                                                                                                                                                                                                   |
-| ---------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth & sessions (Supabase Auth)    | Implemented & deployed                                | Phase 04.5a; commit `ed030c7`; `sessionVersion` trust chain live                                                                                                                                                                                                                                   |
-| Authorization / RBAC               | Implemented; DB-side proofs green, CI wiring pending  | 42-permission catalog (9 platform / 33 tenant) mirrored into `Permission`/`RolePermission`; deny-by-default `authorizeTenant`/`authorizePlatform`/`authorizePlatformTenant`; role-change guards also trigger-enforced; catalog + matrix parity asserted in the DB-backed harness (#37d still open) |
-| Provider support access            | Implemented (unit-proven)                             | `SupportAccessGrant`: one tenant, mandatory reason, default 24 h / max 30 d, revocable, read-only grant set, four audit actions; `has_tenant_write_access` has no support branch                                                                                                                   |
-| Tenant lifecycle & platform admin  | Implemented (Phase 2); live DB unapplied              | Three verified transitions from `TENANT_STATUS_TRANSITIONS`; each permission-gated, reason-bearing, atomic (guarded `updateMany` + history + audit). Suspension = writes/sync denied, reads/downloads kept; no row or storage deletion; no automatic suspension anywhere                           |
-| Provider console (`/admin/*`)      | Implemented (Phase 2); not exercised in a browser     | Provision, search/filter/paginate, lifecycle, plan, branding + preview shells, domains/slug, numbering, owner invitation, status history, audit trail, indicators. Administrator docs: `administration/provider-console.md`                                                                        |
-| Plan catalogue                     | Implemented as **informational only** (Phase 2)       | `Plan` + `Tenant.planId` FK, no price/limit columns, `SELECT`-only for the runtime role, one seeded `standard` plan; assignment audited under `platform.tenants.plan.assign`; grants nothing                                                                                                       |
-| Operational indicators             | Implemented; `lastSyncAt` legitimately `null`         | `lastActivityAt`/`lastSyncAt`/`lastSyncErrorCode` written only by `touch_tenant_activity()` / `record_tenant_sync_attempt()`; no sync transport until Phase 06                                                                                                                                     |
-| Branding (tenant colours/logo)     | Implemented                                           | Phase 04; filesystem logo storage (owner carve-out; see risk S3)                                                                                                                                                                                                                                   |
-| Contacts CRM                       | Implemented                                           | Phase 04; archive-not-delete; outstanding balances from issued docs                                                                                                                                                                                                                                |
-| Catalogue (items, customer prices) | Implemented                                           | Phase 04; decimal-string money, no floats on financial paths                                                                                                                                                                                                                                       |
-| Documents (schema + numbering)     | Schema deployed; engine/PDF/UI pending                | Phase 05 gated; `allocate_document_number()` in migration 10                                                                                                                                                                                                                                       |
-| RLS policies & grants              | Written and applied; **inert** for the running app    | Migrations 8–10; proven against a disposable PostgreSQL by the committed harness + batteries (`RUNBOOK.md` §4.1/§4.3) — **not** by the deployed app; activation = `RUNBOOK.md` §3 (task #38)                                                                                                       |
-| Least-privileged runtime role      | Role + grants exist; `APP_DATABASE_URL` unpublished   | `amisibiz_app` (`NOINHERIT`, no `BYPASSRLS`); production boot refuses the owner-role fallback                                                                                                                                                                                                      |
-| Scoped DB context                  | Implemented (task #35)                                | `scope.ts` writes the five transaction-local GUCs; fail-closed `ScopeNotSetError`; claims re-read from rows by `SECURITY DEFINER` helpers                                                                                                                                                          |
-| Supabase Storage                   | Policies only; app still uses filesystem `/uploads`   | `tenant-branding` bucket + path-scoped object policies (migration 10 §7); adoption is task #36                                                                                                                                                                                                     |
-| DB-backed integration harness      | Not running                                           | `integration-security.test.ts` exists but skips 13 tests without `TEST_DATABASE_URL`; no CI service — task #37                                                                                                                                                                                     |
-| Monorepo & shared packages         | Committed (`f0dfe59`) — still no remote push          | Turborepo 2.11.8; 7 source-only packages; 11 workspace projects                                                                                                                                                                                                                                    |
-| Client shells (Android / Windows)  | Scaffolded only — never compiled                      | Capacitor 8 / Tauri 2; feasibility + prerequisites in each README                                                                                                                                                                                                                                  |
-| CI (GitHub Actions)                | Workflow added — not yet run on GitHub                | Sequence rehearsed green from a pristine copy (18/18 turbo tasks)                                                                                                                                                                                                                                  |
-| Offline / SQLite                   | Not started (by design)                               | Contracts in `@amisibiz/sync`; 04.5d design first                                                                                                                                                                                                                                                  |
-| PDF rendering / download           | Not started (contracts only)                          | `@amisibiz/documents/pdf.ts`; Phase 05; never a KRA/eTIMS invoice                                                                                                                                                                                                                                  |
-| DPO payments / POS                 | Not started (design-only phase pending)               | 04.5e; no simulated live payments                                                                                                                                                                                                                                                                  |
-| KRA/eTIMS                          | Out of scope (separate system; integration note only) | 04.5e note                                                                                                                                                                                                                                                                                         |
-| Vercel deployment                  | Not configured (no `vercel.json`/`.vercel`)           | Phase 08; no deploy claimed                                                                                                                                                                                                                                                                        |
+| Area                               | Status                                                | Evidence / notes                                                                                                                                                                                                                                                                                       |
+| ---------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Auth & sessions (Supabase Auth)    | Implemented & deployed                                | Phase 04.5a; commit `ed030c7`; `sessionVersion` trust chain live                                                                                                                                                                                                                                       |
+| Authorization / RBAC               | Implemented; DB-side proofs green, CI wiring pending  | 42-permission catalog (9 platform / 33 tenant) mirrored into `Permission`/`RolePermission`; deny-by-default `authorizeTenant`/`authorizePlatform`/`authorizePlatformTenant`; role-change guards also trigger-enforced; catalog + matrix parity asserted in the DB-backed harness (#37d still open)     |
+| Provider support access            | Implemented (unit-proven)                             | `SupportAccessGrant`: one tenant, mandatory reason, default 24 h / max 30 d, revocable, read-only grant set, four audit actions; `has_tenant_write_access` has no support branch                                                                                                                       |
+| Tenant lifecycle & platform admin  | Implemented (Phase 2); live DB unapplied              | Three verified transitions from `TENANT_STATUS_TRANSITIONS`; each permission-gated, reason-bearing, atomic (guarded `updateMany` + history + audit). Suspension = writes/sync denied, reads/downloads kept; no row or storage deletion; no automatic suspension anywhere                               |
+| Provider console (`/admin/*`)      | Implemented (Phase 2); not exercised in a browser     | Provision, search/filter/paginate, lifecycle, plan, branding + preview shells, domains/slug, numbering, owner invitation, status history, audit trail, indicators. Administrator docs: `administration/provider-console.md`                                                                            |
+| Plan catalogue                     | Implemented as **informational only** (Phase 2)       | `Plan` + `Tenant.planId` FK, no price/limit columns, `SELECT`-only for the runtime role, one seeded `standard` plan; assignment audited under `platform.tenants.plan.assign`; grants nothing                                                                                                           |
+| Operational indicators             | Implemented; `lastSyncAt` legitimately `null`         | `lastActivityAt`/`lastSyncAt`/`lastSyncErrorCode` written only by `touch_tenant_activity()` / `record_tenant_sync_attempt()`; no sync transport until Phase 06                                                                                                                                         |
+| Branding (tenant colours/logo)     | Implemented                                           | Phase 04; filesystem logo storage (owner carve-out; see risk S3)                                                                                                                                                                                                                                       |
+| Contacts CRM                       | Implemented                                           | Phase 04; archive-not-delete; outstanding balances from issued docs                                                                                                                                                                                                                                    |
+| Catalogue (items, customer prices) | Implemented                                           | Phase 04; decimal-string money, no floats on financial paths                                                                                                                                                                                                                                           |
+| Documents (schema + numbering)     | Schema deployed; engine/PDF/UI pending                | Phase 05 gated; `allocate_document_number()` in migration 10                                                                                                                                                                                                                                           |
+| RLS policies & grants              | Written and applied; **inert** for the running app    | Migrations 8–10; proven against a disposable PostgreSQL by the committed harness + batteries (`RUNBOOK.md` §4.1/§4.3) — **not** by the deployed app; activation = `RUNBOOK.md` §3 (task #38)                                                                                                           |
+| Least-privileged runtime role      | Role + grants exist; `APP_DATABASE_URL` unpublished   | `amisibiz_app` (`NOINHERIT`, no `BYPASSRLS`); production boot refuses the owner-role fallback                                                                                                                                                                                                          |
+| Scoped DB context                  | Implemented (task #35)                                | `scope.ts` writes the five transaction-local GUCs; fail-closed `ScopeNotSetError`; claims re-read from rows by `SECURITY DEFINER` helpers                                                                                                                                                              |
+| Supabase Storage                   | Policies only; app still uses filesystem `/uploads`   | `tenant-branding` bucket + path-scoped object policies (migration 10 §7); adoption is task #36                                                                                                                                                                                                         |
+| DB-backed integration harness      | Runs, never in CI                                     | `integration-security.test.ts` — 26 cases as `amisibiz_app`, green against a disposable PostgreSQL; self-skips without `TEST_DATABASE_URL`. A `security` CI job exists (#37d) and has been rehearsed step by step locally, but no workflow run exists (no push) — task #37 closes only on one of those |
+| Monorepo & shared packages         | Committed (`f0dfe59`) — still no remote push          | Turborepo 2.11.8; 7 source-only packages; 11 workspace projects                                                                                                                                                                                                                                        |
+| Client shells (Android / Windows)  | Scaffolded only — never compiled                      | Capacitor 8 / Tauri 2; feasibility + prerequisites in each README                                                                                                                                                                                                                                      |
+| CI (GitHub Actions)                | Workflow added — not yet run on GitHub                | Sequence rehearsed green from a pristine copy (18/18 turbo tasks)                                                                                                                                                                                                                                      |
+| Offline / SQLite                   | Not started (by design)                               | Contracts in `@amisibiz/sync`; 04.5d design first                                                                                                                                                                                                                                                      |
+| PDF rendering / download           | Not started (contracts only)                          | `@amisibiz/documents/pdf.ts`; Phase 05; never a KRA/eTIMS invoice                                                                                                                                                                                                                                      |
+| DPO payments / POS                 | Not started (design-only phase pending)               | 04.5e; no simulated live payments                                                                                                                                                                                                                                                                      |
+| KRA/eTIMS                          | Out of scope (separate system; integration note only) | 04.5e note                                                                                                                                                                                                                                                                                             |
+| Vercel deployment                  | Not configured (no `vercel.json`/`.vercel`)           | Phase 08; no deploy claimed                                                                                                                                                                                                                                                                            |
 
-## Verification status (last run 2026-10-14, Phase 2 / task #45)
+## Verification status (last run 2026-10-14, Phase 2 / task #45 — superseded for the current tree by the follow-up run below)
 
 | Gate                                       | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -118,44 +118,52 @@
 | Provider console in a browser              | **Not exercised** — no live tenant exists and migration 11 is unapplied; the UI is verified by build, type-check and unit tests                                                                                                                                                                                                                                                                                                                                  |
 | CI on GitHub                               | **Never executed** (no push) — workflow exists, rehearsal green                                                                                                                                                                                                                                                                                                                                                                                                  |
 
-### Follow-up run — DB-backed authorization harness (#37a/#37b, 2026-10-15)
+### Follow-up run — DB-backed harness, bundle scan, CI job and the two earned migrations (#37a–#37d, #50, #51; 2026-10-15)
 
 `apps/web/tests/integration-security.test.ts` is now a real RLS harness: it builds
 fixtures as the table owner, then asserts inside `SET LOCAL ROLE amisibiz_app`,
 refuses any `TEST_DATABASE_URL` that looks like the shared Supabase project, and
 migrates its own disposable database with both `DATABASE_URL` and `DIRECT_URL`
 pinned. The behaviour battery, its legacy fixture and the clean-room driver moved
-from git-ignored `.tmp/` into tracked files. Committed as `801e7c6`.
+from git-ignored `.tmp/` into tracked files. Committed as `801e7c6`. Since that
+commit the tree also carries the automated bundle scan (#37c), the CI `security`
+job (#37d) and the two migrations the harness earned (#50, #51).
 
-| Gate                                              | Result                                                                                                       |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| harness with `TEST_DATABASE_URL`                  | **25 passed / 0 failed** — on a rebuilt DB, a brand-new DB, and again on `main` with migrations 1–11 only    |
-| teardown                                          | `tenants=0 / users=0 / grants=0 / foreign=0` (the last-owner guard is paused in `afterAll`, then re-enabled) |
-| `scripts/db/cleanroom-chain.sh p37_main2`         | 78 · 67 · 67 · 55 · 67 PASS, **0 FAIL**; migration-11 abort probe fires; step 13 no-op                       |
-| `pnpm turbo run lint type-check test:run --force` | 17/17 tasks, **256 passed / 25 skipped**, 0 errors; the only warning is the known `<img>`                    |
-| `pnpm build` / `pnpm format:check`                | green                                                                                                        |
-| repo-wide gates before the parking decision       | **red** with 10 type errors, all inside the untracked Phase 05 UI — see the parking bullet above             |
-| live Supabase project                             | **unchanged** — 10 applied, 11 pending, zero business data, no probe run                                     |
+| Gate                                              | Result                                                                                                                                                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| harness with `TEST_DATABASE_URL`                  | **26 passed / 0 failed** — on a rebuilt DB, a brand-new DB, on `main` with migrations 1–11 only, and again on a fresh database carrying `20261021000000`/`20261021000001` (`p37_gates`, 13:37) |
+| teardown                                          | `tenants=0 / users=0 / grants=0 / foreign=0` (the last-owner guard is paused in `afterAll`, then re-enabled)                                                                                   |
+| `scripts/db/cleanroom-chain.sh p37_final`         | 78 · 71 + 1 SKIP · 71 + 1 SKIP · 55 · **72** PASS, **0 FAIL**, exit 0; migration-11 abort probe fires; step 13 applies both new migrations and re-runs the battery                             |
+| `pnpm turbo run lint type-check test:run --force` | 17/17 tasks, **256 passed / 26 skipped**, 0 errors; the only warning is the known `<img>`                                                                                                      |
+| `pnpm build` / `pnpm format:check`                | green (build exit 0; `format:check` after the doc sweep)                                                                                                                                       |
+| `pnpm check:bundles` (#37c)                       | clean — 178 files / 5.1 MB across `.next/static` + `.next/server`, after a fresh build                                                                                                         |
+| repo-wide gates before the parking decision       | **red** with 10 type errors, all inside the untracked Phase 05 UI — see the parking bullet above                                                                                               |
+| live Supabase project                             | **unchanged** — 10 applied, 11 pending, zero business data, no probe run                                                                                                                       |
 
-Three findings came out of it and none was silenced by weakening a policy: support
-access is fenced by the grant rather than the active context, naive `timestamp(3)`
-window columns shift against a non-UTC `now()`, and the battery's platform-admin
-case had to become a comparison against the owner's unfiltered totals. Details:
+Three findings came out of the harness and none was silenced by weakening a policy:
+support access was fenced by the grant rather than the active context (**fixed** by
+`20261021000000`), naive `timestamp(3)` window columns shift against a non-UTC
+`now()` (**fixed** by `20261021000001`), and the battery's platform-admin case had to
+become a comparison against the owner's unfiltered totals. Details:
 `architecture/security-model.md` §13.6–§13.7 and
-`implementation/phase-01-security-harness-report.md`.
+`implementation/phase-01-security-harness-report.md` §5.
 
 ## Open risks (top items — full register: `implementation/phase-04.5b-monorepo-and-clients-audit.md` §5)
 
 1. **S2 — RLS inert:** the runtime cannot yet connect as `amisibiz_app` (no
    password), so application-layer authorization is the only control in force
-   for a deployed app. Closure: `RUNBOOK.md` §3 + `pnpm db:assert-rls`.
-2. **The eight security proofs are reproducible but not automated.** They now run
-   from tracked files — `tests/integration-security.test.ts` (25 cases as
-   `amisibiz_app`), `prisma/scripts/rls-behavior-battery.sql` and
-   `scripts/db/cleanroom-chain.sh` — against a real PostgreSQL, and the `.tmp/`
-   scratch dependency is gone. Still open: no CI job runs them (#37d, task #49), no
-   automated client-bundle scan backs proof 8 (#37c, task #48), and no live project
-   has been probed (#38).
+   for a deployed app. Closure: `administration/rls-activation-operator-procedure.md`
+   (`RUNBOOK.md` §3 is its summary) + `pnpm db:assert-rls`.
+2. **The eight security proofs are reproducible and now automated, but no CI run
+   exists.** They run from tracked files — `tests/integration-security.test.ts` (26
+   cases as `amisibiz_app`), `prisma/scripts/rls-behavior-battery.sql`,
+   `scripts/db/cleanroom-chain.sh` — against a real PostgreSQL, the `.tmp/` scratch
+   dependency is gone, and proof 8 has its own automated check
+   (`pnpm build && pnpm check:bundles`, #37c / task #48). `.github/workflows/ci.yml`
+   carries a `security` job that runs the chain, both batteries, the harness and
+   three role/catalog SQL assertions on a disposable Postgres 16 (#37d / task #49).
+   **Neither has ever executed:** this repository has no remote push, so "CI green"
+   is not a claim anyone can make yet. No live project has been probed (#38).
 3. **S1 — Supabase project shared with AmisERP:** dedicated production project
    recommended before launch (owner decision).
 4. **S6 — No email transport:** verification/password-reset emails are not
@@ -171,11 +179,16 @@ case had to become a comparison against the owner's unfiltered totals. Details:
 6. **`docs/ENGINEERING_CONSTITUTION.md` missing:** the Phase 0 pack references it;
    the binding rules are recorded in docs/memory — commit the canonical text.
 7. **Client shells uncompiled:** no Android/Tauri build has been run anywhere.
-8. **Two policy findings the harness surfaced are unfixed:** the support branch of
-   `has_tenant_read_access` is not scoped to the active context, and the
-   support/invitation window columns are naive `timestamp(3)`. Both need **new**
-   migrations (tasks #50, #51); migrations 1–11 are frozen, and applying anything
-   to the live project stays owner-gated.
+8. **The two policy findings are fixed in the tree, not in the deployed database:**
+   `20261021000000_phase1_support_read_access_scoped_to_context` scopes the
+   `has_tenant_read_access` support branch to the active context (with an explicit
+   no-context exception so the provider console can still list its granted
+   workspaces), and `20261021000001_phase1_support_and_invitation_windows_are_instants`
+   converts the support/invitation window columns to `timestamp(3) WITH TIME ZONE`
+   (tasks #50, #51). Both are authored, applied to throwaway databases, and covered by
+   harness cases that fail without them. They are **not** on the live project, which is
+   still at migration 10 — so the unfixed behaviour is what any deployed instance still
+   runs until #38 and the owner-gated migration sequence complete.
 
 ## Next actions (owner-gated)
 
@@ -183,13 +196,21 @@ case had to become a comparison against the owner's unfiltered totals. Details:
    approval): four commits are local on `main` and the parked branch is local too;
    publishing to GitHub — which is what would make the CI workflow run for the
    first time — remains the owner's call. Nothing is ever pushed unilaterally.
-2. **#38 operator step:** set a strong `amisibiz_app` password out of band and
-   publish `APP_DATABASE_URL`, then run live probes **only with the owner's
-   go-ahead**. Rotate the Supabase credential block that was pasted into chat.
-3. **#37 remainder:** the harness and batteries are done (#37a/#37b); what is left
-   is the automated bundle scan (#37c) and the CI Postgres service (#37d).
-4. **#50 / #51** — the two follow-up migrations the harness earned, authored and
-   verified offline.
+2. **#38 operator step — execute `administration/rls-activation-operator-procedure.md`.**
+   It is written as a runbook: preflight queries, credential rotation for the Supabase
+   block that was pasted into chat, `ALTER ROLE amisibiz_app PASSWORD …`, publishing
+   `APP_DATABASE_URL`, `pnpm db:assert-rls`, then the three pending migrations and the
+   post-apply probes, each with the output to expect and the condition to stop on. It
+   has **not** been executed; every live step needs the owner's go-ahead, and the
+   procedure says so at each point.
+3. **#37 remainder:** the harness, both batteries, the clean-room chain, the
+   automated bundle scan (#37c) and the CI security job (#37d) are all in the tree.
+   #37 closes only when a CI run exists — which needs the push in item 1 — or when
+   the owner accepts the local equivalent (both batteries plus the 26 harness cases
+   green on a disposable database, as recorded in §5 of the harness report).
+4. **#50 / #51 — done in the repository, pending on the live project.** The two
+   follow-up migrations the harness earned (`20261021000000`, `20261021000001`) are
+   authored and verified offline; §8 of the operator procedure applies them.
 5. **#36** Supabase Storage adoption for logos (the policies already exist).
 6. **04.5c** shadcn/ui for new UI → **04.5d** offline design → **04.5e**
    DPO/eTIMS design → **Phase 05 resumes** only when the gate opens; the Phase 03/05
@@ -199,16 +220,18 @@ case had to become a comparison against the owner's unfiltered totals. Details:
 
 ## Documentation map
 
-| Document                                                   | Purpose                                                                                                        |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `RUNBOOK.md`                                               | Operations: env vars, the two DB connections, RLS activation, verification, migration rules, incident response |
-| `implementation/phase-checklist.md`                        | Phase plan, gates, env vars, next action                                                                       |
-| `implementation/phase-00-repository-audit.md`              | Phase 0 audit                                                                                                  |
-| `implementation/phase-01-foundation-report.md`             | Foundation execution record                                                                                    |
-| `implementation/phase-01-security-harness-report.md`       | DB-backed authorization proofs (#37a/#37b), the findings, and the Phase 3 gap table                            |
-| `implementation/phase-01-security-design.md`               | Phase 1 authorization/RLS design                                                                               |
-| `implementation/phase-04.5b-monorepo-and-clients-audit.md` | Monorepo/client audit + risk register                                                                          |
-| `implementation/phase-04.5-constitution-alignment.md`      | 04.5a execution record                                                                                         |
-| `architecture/security-model.md`                           | Trust boundaries, threat model, §13 Phase 1 status                                                             |
-| `architecture/permission-matrix.md`                        | Roles, permission catalog, enforcement layers                                                                  |
-| `architecture/system-design.md`                            | Architecture canon                                                                                             |
+| Document                                                   | Purpose                                                                                                                                                                                        |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RUNBOOK.md`                                               | Operations: env vars, the two DB connections, RLS activation, verification, migration rules, incident response                                                                                 |
+| `implementation/phase-checklist.md`                        | Phase plan, gates, env vars, next action                                                                                                                                                       |
+| `implementation/phase-00-repository-audit.md`              | Phase 0 audit                                                                                                                                                                                  |
+| `implementation/phase-01-foundation-report.md`             | Foundation execution record                                                                                                                                                                    |
+| `implementation/phase-01-security-harness-report.md`       | DB-backed authorization proofs (#37a–#37d), the findings and the migrations they earned, and the Phase 3 gap table                                                                             |
+| `administration/rls-activation-operator-procedure.md`      | #38 step by step: credential rotation, the `amisibiz_app` password, `APP_DATABASE_URL`, enforcement proof, the three pending migrations, post-apply probes, stop conditions — **not executed** |
+| `administration/provider-console.md`                       | How to run the provider console (Phase 2)                                                                                                                                                      |
+| `implementation/phase-01-security-design.md`               | Phase 1 authorization/RLS design                                                                                                                                                               |
+| `implementation/phase-04.5b-monorepo-and-clients-audit.md` | Monorepo/client audit + risk register                                                                                                                                                          |
+| `implementation/phase-04.5-constitution-alignment.md`      | 04.5a execution record                                                                                                                                                                         |
+| `architecture/security-model.md`                           | Trust boundaries, threat model, §13 Phase 1 status                                                                                                                                             |
+| `architecture/permission-matrix.md`                        | Roles, permission catalog, enforcement layers                                                                                                                                                  |
+| `architecture/system-design.md`                            | Architecture canon                                                                                                                                                                             |

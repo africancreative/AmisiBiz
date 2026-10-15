@@ -1,7 +1,7 @@
 # AmisiBiz — Phased Implementation Checklist
 
-- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 04.5a (Supabase Auth swap) complete and deployed; Phase 05 documents schema + numbering deployed; **Phase 04.5b — Turborepo monorepo + shared packages + client shells + CI — complete (2026-10-14)**, executed as the owner-directed “Phase 1 — application foundation”; next: 04.5c (shadcn/ui for new UI), 04.5d/04.5e (offline + DPO/eTIMS design docs), then Phase 05 implementation resumes with the engine authored in `@amisibiz/documents`/packages. **Separately, the constitution's Phase 1 directive (core authorization, RBAC catalog and PostgreSQL RLS) is code-complete through task #35 (2026-10-14) and now DB-proven: the integration harness runs 25 cases as `amisibiz_app` against a disposable PostgreSQL and passes, with the behavioral batteries and the clean-room driver committed (#37a/#37b, 2026-10-15 — `phase-01-security-harness-report.md`). It is still not live-verified: RLS stays inert until the operator step in `../RUNBOOK.md` §3 (#38), proofs #37c/#37d are open, and business feature work (Phase 05 tasks #11–#15, the Phase 3 pack) remains gated — the repository half of the gate is met, the operational half is #38. The untracked Phase 03/05 business code that was keeping `type-check`/`build` red is **parked on branch `wip/phase05-business-features`** (`0a67b69`, decision recorded 2026-10-15 as task #52), so `main` is the verified tree again: 17/17 lint + type-check + test tasks, **256 passed / 25 skipped**, build and format green, harness 25/25 on migrations 1–11.**
-- **Companion docs:** `../IMPLEMENTATION_STATUS.md` (status dashboard), `phase-00-repository-audit.md` (Phase 0 audit — current), `../architecture/repository-audit.md` (historical), `../architecture/system-design.md`, `../architecture/security-model.md`, `phase-04-completion-report.md`, `phase-03.5-supabase-alignment-audit.md`, `phase-04.5b-monorepo-and-clients-audit.md`, `phase-01-foundation-report.md`, `phase-01-security-design.md` (Phase 1 directive design), `phase-01-security-harness-report.md` (the DB-backed proofs, #37a/#37b), `../RUNBOOK.md` (operations, RLS activation)
+- **Status:** Active plan — Phases 00–04 complete; Phase 03.5 (Supabase alignment audit) complete; Phase 04.5a (Supabase Auth swap) complete and deployed; Phase 05 documents schema + numbering deployed; **Phase 04.5b — Turborepo monorepo + shared packages + client shells + CI — complete (2026-10-14)**, executed as the owner-directed “Phase 1 — application foundation”; next: 04.5c (shadcn/ui for new UI), 04.5d/04.5e (offline + DPO/eTIMS design docs), then Phase 05 implementation resumes with the engine authored in `@amisibiz/documents`/packages. **Separately, the constitution's Phase 1 directive (core authorization, RBAC catalog and PostgreSQL RLS) is code-complete through task #35 (2026-10-14) and now DB-proven: the integration harness runs 26 cases as `amisibiz_app` against a disposable PostgreSQL and passes, with the behavioral batteries and the clean-room driver committed (#37a/#37b, 2026-10-15 — `phase-01-security-harness-report.md`), the automated bundle scan in place (#37c) and a CI `security` job authored and rehearsed step by step locally but never run (#37d). It is still not live-verified: RLS stays inert until the operator step in `../administration/rls-activation-operator-procedure.md` (#38), and business feature work (Phase 05 tasks #11–#15, the Phase 3 pack) remains gated — the repository half of the gate is met, the operational half is #38. The untracked Phase 03/05 business code that was keeping `type-check`/`build` red is **parked on branch `wip/phase05-business-features`** (`0a67b69`, decision recorded 2026-10-15 as task #52), so `main` is the verified tree again: 17/17 lint + type-check + test tasks, **256 passed / 26 skipped**, build and format green, harness 26/26 including migrations `20261021000000`/`20261021000001`.**
+- **Companion docs:** `../IMPLEMENTATION_STATUS.md` (status dashboard), `phase-00-repository-audit.md` (Phase 0 audit — current), `../architecture/repository-audit.md` (historical), `../architecture/system-design.md`, `../architecture/security-model.md`, `phase-04-completion-report.md`, `phase-03.5-supabase-alignment-audit.md`, `phase-04.5b-monorepo-and-clients-audit.md`, `phase-01-foundation-report.md`, `phase-01-security-design.md` (Phase 1 directive design), `phase-01-security-harness-report.md` (the DB-backed proofs, #37a/#37b), `../RUNBOOK.md` (operations, RLS activation), `../administration/rls-activation-operator-procedure.md` (the #38 walkthrough, step by step, not executed)
 
 Rules: implement **one phase at a time**; do not start a phase whose dependencies are unmet; every phase ends with the verification suite below green and a completion report.
 
@@ -62,15 +62,25 @@ thresholds to be set in Phase 07.
 
 **Integration reality (updated 2026-10-15):** the "integration" layer now **runs
 against a real database**. `apps/web/tests/integration-security.test.ts` is a DB-
-backed harness — 25 cases that build fixtures as the table owner, then assert
-inside `SET LOCAL ROLE amisibiz_app` — and it passes 25/25 against a disposable
+backed harness — 26 cases that build fixtures as the table owner, then assert
+inside `SET LOCAL ROLE amisibiz_app` — and it passes 26/26 against a disposable
 PostgreSQL; the behavioral battery, the legacy fixture and the clean-room chain
 driver are tracked files (`prisma/scripts/rls-behavior-battery.sql`,
 `prisma/scripts/fixtures/phase1-legacy-fixture.sql`,
 `scripts/db/cleanroom-chain.sh`), so the `.tmp/` scratch dependency is gone. It
 still self-skips when `TEST_DATABASE_URL` is unset, so a green `pnpm test:run` on
-a machine without a database proves nothing about policies. Remaining: no CI job
-provides Postgres (#37d) and no automated bundle scan (#37c). The Phase 1
+a machine without a database proves nothing about policies. #37c and #37d are now
+in the tree too: `pnpm check:bundles` scans the build output for privileged
+credentials, and `ci.yml` has a `security` job that stands up a disposable
+PostgreSQL 16 and runs the chain, both batteries, the harness and three
+anti-vacuousness SQL assertions. Every step of that job has been executed locally
+as a rehearsal (see `phase-01-security-harness-report.md` §5.2), but the job itself
+has never run, because nothing has been pushed. Two of the harness's findings became
+follow-up migrations rather than documented exceptions:
+`20261021000000_phase1_support_read_access_scoped_to_context` and
+`20261021000001_phase1_support_and_invitation_windows_are_instants` (§5.3), each
+with a harness case that fails on the pre-migration schema and passes on the
+post-migration one. The Phase 1
 directive's gate ("no business feature work until the core authorization and RLS
 tests pass") therefore **still stays shut** — its other half is operational, not
 repository, and belongs to #38.
@@ -388,12 +398,16 @@ record: `phase-01-security-design.md`; enforcement status:
 - **Not done (do not describe this phase as complete):**
   - **#38** operator step — `amisibiz_app` still has no password, so the runtime
     cannot connect as the role the policies were written for. **RLS is inert.**
-  - **#37** — partly closed (2026-10-15). The DB-backed harness now runs the eight
-    required proofs as `amisibiz_app` against a disposable PostgreSQL, the
-    code↔database catalog and matrix parity is one of its cases, and the
-    behavioral battery is committed rather than left in scratch files. Still open
-    inside #37: the automated bundle scan (#37c) and the CI Postgres service
-    (#37d).
+    Procedure: `../administration/rls-activation-operator-procedure.md` (not executed).
+  - **#37** — repository side closed (2026-10-15). The DB-backed harness runs the
+    eight required proofs as `amisibiz_app` against a disposable PostgreSQL, the
+    code↔database catalog and matrix parity is one of its cases, the behavioral
+    battery is committed rather than left in scratch files, proof 8 has an automated
+    bundle scan (`pnpm check:bundles`), and CI has a `security` job that runs all of
+    it on runner-local Postgres. Two things keep #37 out of the "done" column: that
+    job has **never executed** (no push), and the workflow's own numbers are therefore
+    rehearsal numbers, not CI numbers. The harness's two findings have since become
+    migrations (`20261021000000`, `20261021000001` — tasks #50, #51), verified offline.
   - **#36** Supabase Storage adoption (policies exist; the app still uses
     `/uploads`).
 - **Gate this phase imposes:** _"Do not begin business feature development until
@@ -651,28 +665,32 @@ no remote push — task #30 closed by the owner's two-commit approval):**
 
 **Next, in order (each owner-gated):**
 
-1. **#38 — operator step** (`../RUNBOOK.md` §3): generate a strong
-   `amisibiz_app` password out of band, `ALTER ROLE`, publish `APP_DATABASE_URL`,
+1. **#38 — operator step** (`../administration/rls-activation-operator-procedure.md`,
+   summarised in `../RUNBOOK.md` §3): rotate the compromised Supabase credential block,
+   generate a strong `amisibiz_app` password out of band, `ALTER ROLE`, publish
+   `APP_DATABASE_URL`,
    then run `pnpm db:assert-rls` and the live verification probes **only with the
    owner's explicit go-ahead**. Until this lands, RLS does not govern the running
    application, and no authorization claim here should be read as "enforced by
    the database in production".
-2. **Apply migration 11 to the live project** (`../RUNBOOK.md` §5): with
+2. **Apply migration 11 to the live project, then `20261021000000`/`20261021000001`**
+   (`../RUNBOOK.md` §5, procedure §8): with
    `DATABASE_URL`/`DIRECT_URL` pinned to the session-mode pooler and the
    clean-room chain already green, `prisma migrate deploy` then re-runs
    `pnpm db:assert-rls`. It aborts loudly if any `Tenant.planId` still holds a
    legacy text label — an operator resolves the row, never the migration file.
    Once applied, migration 11 is frozen like 1–10.
-3. **#37 remainder — what is actually left:** the harness and both batteries are
-   committed and green against a disposable PostgreSQL as `amisibiz_app`
+3. **#37 remainder — what is actually left:** the harness, both batteries, the
+   clean-room chain, the automated client-bundle secret scan (`pnpm check:bundles`,
+   #37c) and the CI `security` job with its runner-local Postgres service (#37d) are
+   all committed and green against a disposable PostgreSQL as `amisibiz_app`
    (`tests/integration-security.test.ts`, `prisma/scripts/rls-behavior-battery.sql`,
-   `prisma/scripts/phase02-migration-checks.sql`, driven end-to-end by
-   `scripts/db/cleanroom-chain.sh`). Open: an automated client-bundle secret scan
-   (#37c, proof 8) and a CI job with a Postgres service that runs the harness plus
-   both batteries on every push (#37d). Two follow-up migrations are owed by the
-   findings in `../architecture/security-model.md` §13.7 — tighten the
-   `has_tenant_read_access` support branch, and convert the support/invitation
-   window columns to `timestamp(3) WITH TIME ZONE`.
+   `prisma/scripts/phase02-migration-checks.sql`, `scripts/db/cleanroom-chain.sh`).
+   The two findings in `../architecture/security-model.md` §13.7 are now migrations —
+   `20261021000000_phase1_support_read_access_scoped_to_context` and
+   `20261021000001_phase1_support_and_invitation_windows_are_instants`. What is left
+   is not repository work: the `security` job must actually run, which needs the push
+   in item 1, or the owner must accept the documented local rehearsal as equivalent.
 4. **#36 — Supabase Storage adoption** for logos (bucket + object policies exist
    in migration 10; the app still writes to `/uploads`).
 5. **04.5c → 04.5d → 04.5e → Phase 05 resumes.** The directive's gate holds:

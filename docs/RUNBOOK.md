@@ -103,7 +103,11 @@ committed. Until an operator sets a strong password out of band and publishes
 refuses to boot.
 
 Perform this as a sequence, in a SQL console authenticated as the project owner
-(Supabase → SQL Editor) — never through the application:
+(Supabase → SQL Editor) — never through the application. The full walkthrough, with
+the read-only preflight queries, the credential-rotation step, exact connection
+strings, the expected output of every probe and the abort conditions, is
+`administration/rls-activation-operator-procedure.md`; the summary below and that
+document must stay in step with each other:
 
 1. **Generate** a password locally, out of band: `openssl rand -base64 32`.
    Store it in the deployment secret manager. Do not paste it into the
@@ -119,6 +123,10 @@ Perform this as a sequence, in a SQL console authenticated as the project owner
    printed there is drift to investigate before continuing.
 5. **Prove enforcement** with `pnpm db:assert-rls` (section 4.2). Exit `0` is
    the only acceptable result after step 3.
+6. **Then, and only then, apply the pending migrations** (section 5) with both
+   `DATABASE_URL` and `DIRECT_URL` pinned, and re-run `pnpm db:assert-rls`.
+   Enforcement first, schema second: if the app cannot be proven to connect as the
+   role the policies were written for, a new migration just widens the unproven area.
 
 The runtime uses the transaction-mode pooler (port 6543). The tenant context is
 five **transaction-local** GUCs (`set_config(..., true)` inside a Prisma
@@ -158,8 +166,8 @@ TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55499/<freshdb> \
 The harness refuses any URL that looks like the shared Supabase project, migrates
 the disposable database itself (pinning both `DATABASE_URL` and `DIRECT_URL`, §4.3
 trap), builds fixtures as the table owner and then runs every assertion inside
-`SET LOCAL ROLE amisibiz_app`. 25 cases currently pass; without
-`TEST_DATABASE_URL` the suite reports 25 skipped.
+`SET LOCAL ROLE amisibiz_app`. 26 cases currently pass; without
+`TEST_DATABASE_URL` the suite reports 26 skipped.
 
 ### 4.2 Live probes (touch a real project — get explicit go-ahead first)
 
@@ -185,13 +193,20 @@ PGHOST=localhost PGPORT=55499 PGUSER=postgres sh scripts/db/cleanroom-chain.sh <
 1–7, proves the PRE-remediation leak with a foreign table, loads
 `apps/web/prisma/scripts/fixtures/phase1-legacy-fixture.sql`, applies 8–10, runs
 the POST probes, then `phase01-migration-checks.sql` (78 PASS),
-`rls-behavior-battery.sql` as `amisibiz_app` (67 PASS), the migration-11 **abort**
-probe, migration 11 after an operator NULLs the legacy `planId`, the Phase 1
-battery again as the regression check on top of 11 (67 PASS),
-`phase02-migration-checks.sql` (55 PASS), and finally any migration newer than 11
-that exists in the tree with the battery re-run once more (67 PASS). Logs land in
-`.tmp/cleanroom_*`. It speaks raw `psql` rather than `prisma migrate deploy`
-precisely because of the `DIRECT_URL` trap below.
+`rls-behavior-battery.sql` as `amisibiz_app` (71 PASS + 1 labelled SKIP), the
+migration-11 **abort** probe, migration 11 after an operator NULLs the legacy
+`planId`, the Phase 1 battery again as the regression check on top of 11 (71 PASS +
+1 labelled SKIP), `phase02-migration-checks.sql` (55 PASS), and finally any
+migration newer than 11 that exists in the tree — today `20261021000000` and
+`20261021000001` — with the battery re-run once more (**72 PASS**, the SKIP now a
+real assertion). Logs land in `.tmp/cleanroom_*`. It speaks raw `psql` rather than
+`prisma migrate deploy` precisely because of the `DIRECT_URL` trap below.
+
+The battery is told which schema it is measuring through a session GUC: steps 8 and
+11 run with `PGOPTIONS='-c app.support_context_fenced=false'` (the frozen 1–11 chain
+still has the unfenced support branch, so case `T9j` prints SKIP while still
+bounding the count), step 13 with `=true`. Do not "fix" those SKIPs by loosening a
+policy — they are the honest record of a schema that the later migrations tighten.
 
 The manual steps, if you need to do one in isolation:
 
@@ -223,7 +238,68 @@ DIRECT_URL=postgresql://postgres@localhost:<port>/<db> \
   npx prisma migrate deploy
 ```
 
+**A second trap on the same machine: `localhost` and `127.0.0.1` are not the same
+cluster.** On the Windows laptop that runs these batteries, port 55499 has had two
+listeners — one bound to IPv6 `localhost`, one to IPv4 `127.0.0.1` — each holding a
+different set of databases. `cleanroom-chain.sh` defaults to `PGHOST=localhost`
+while the harness examples use `127.0.0.1`, so a "clean" result can describe a
+completely different database than the one you then inspected. Confirm which
+cluster you are actually talking to before drawing any conclusion from a query:
+
+```sh
+psql -h localhost  -p 55499 -U postgres -Atc "SELECT inet_server_addr(), inet_server_port();"
+psql -h 127.0.0.1  -p 55499 -U postgres -Atc "SELECT inet_server_addr(), inet_server_port();"
+```
+
+### 4.4 Proof 8 — privileged credentials must not reach the client bundle
+
+```sh
+pnpm build && pnpm check:bundles   # node scripts/security/scan-client-bundles.mjs
+```
+
+Scans `apps/web/.next/static` and `apps/web/.next/server` for a `sb_secret_*`
+value, a decodable service-role JWT, a `service_role` literal, a Postgres URL with
+an embedded password, and inlined `SUPABASE_JWT_SECRET` material. Structural
+patterns only — the script contains no real credential, because a committed copy
+would be the leak it hunts. `postgresql://amisibiz_app:<password>@<host>` inside
+our own operator-facing error message is deliberately not a finding (placeholder
+markers are excluded); planting a real-shaped value into a scanned file is, which
+is how this check was validated. CI runs it after the build.
+
+### 4.5 The CI `security` job, and the one rule its batteries must keep
+
+`.github/workflows/ci.yml` has a second job, `security`, that runs after `verify`:
+
+1. a `postgres:16-alpine` service container on `localhost:5432`, superuser
+   `postgres` / `ci-only-superuser` — never the application role, and never a
+   credential that could reach the shared project;
+2. `sh scripts/db/cleanroom-chain.sh ci_chain` — the whole §4.3 chain on the runner;
+3. a verdict gate over the logs it produced: any `FAIL` line fails the job, and each
+   battery must reach its recorded PASS floor (78 / 71 + 1 SKIP / 71 + 1 SKIP /
+   55 / 72 — the last floor rises when `20261021000000` lands, because the SKIP
+   becomes a real assertion);
+4. the 26-case harness against `TEST_DATABASE_URL` (a fresh `amisibiz_rls` database
+   that Prisma's `migrate deploy` creates itself — verified, not assumed);
+5. three anti-vacuousness assertions: `amisibiz_app` exists with `NOINHERIT` and no
+   `BYPASSRLS`, `Permission` = 42, `Tenant` = 0 after the harness tears down.
+
+**The rule the batteries have to respect:** a `\echo` trailer in
+`apps/web/prisma/scripts/*.sql` must not contain the literal word `FAIL`, because step
+3 greps the captured output for exactly that marker. `phase02-migration-checks.sql`
+used to end by telling the reader to grep the output above for that word, and would
+have failed every CI run while the battery itself was green. A verdict line is fine —
+`… : FAIL (%)` is what a real failure prints — a reminder about the word is not.
+
+Local status: every step above has been run against the throwaway cluster and each
+produced the result documented in
+`implementation/phase-01-security-harness-report.md` §5.2 (the job) and §5.3 (the
+floors after migrations `20261021000000`/`20261021000001`), including the two failure
+modes of the verdict gate (planted `FAIL` line, emptied log). The job has **not** run
+on GitHub — there is no push — and the runner is PostgreSQL 16 while the local cluster
+is 18.4, so treat "CI green" as unproven until an actual run exists.
+
 Supabase connection facts: reach the project through the Supavisor pooler
+
 (`aws-1-eu-west-2.pooler.supabase.com`) — 6543 with `?pgbouncer=true` for the
 app, 5432 session mode for the CLI. The direct `db.<ref>.supabase.co` host is
 IPv6-only and unreachable from an IPv4-only machine. `prisma migrate deploy`
@@ -286,16 +362,19 @@ Expected: the abort probe refuses to convert a legacy text `planId` and leaves t
 database untouched (the file is one transaction); after an operator resolves the
 label it applies with `plans=1`, `permission catalog=42`, `role matrix=116`,
 `planId type=uuid`; the Phase 2 battery prints **55 PASS and no FAIL**; the Phase 1
-battery still prints **67 PASS and no FAIL**, both before and after 11 (it is the
-regression check on top of 11); and `prisma migrate diff --from-url <scratch>
+battery prints **71 PASS plus one labelled SKIP** before and immediately after 11 —
+the SKIP is `T9j`, which cannot assert the fenced support branch until
+`20261021000000` is applied — and **72 PASS and no FAIL** once step 13 has applied
+it; and `prisma migrate diff --from-url <scratch>
 --to-schema-datamodel prisma/schema.prisma` prints nothing but the probe fixture's
 `DROP TABLE "other_app_data"`.
 
 Evidence caveat retired, one honest gap left: the chain driver
 (`scripts/db/cleanroom-chain.sh`), the Phase 1 behaviour battery, and the legacy
-fixture are now **tracked files**, so the procedure above reproduces from the
-repository alone; what is still missing is the CI job that runs them
-automatically (task #37d).
+fixture are **tracked files**, so the procedure above reproduces from the
+repository alone, and the CI job that runs them automatically (#37d) now exists in
+`.github/workflows/ci.yml` and has been rehearsed step by step locally — what is
+still missing is an actual GitHub Actions run, because nothing has been pushed.
 
 **Migration 12 is not on `main`.** `20261020000000_phase05_portal_linkage`
 (`Contact.portalUserId`, an FK to `User` with `ON DELETE SET NULL`, a unique index
@@ -304,8 +383,9 @@ business-feature work, never reviewed, never applied anywhere and never
 gate-verified. On 2026-10-15 the owner directed that it be parked rather than
 merged: it now exists only on branch `wip/phase05-business-features` (commit
 `0a67b69`), together with the document UI that does not compile. `main` therefore
-carries migrations 1–11 and its chain run reports 78 · 67 · 67 · 55 · 67 PASS with
-step 13 stepping down as a no-op.
+carries the Phase 1–2 chain plus the two Phase 1 gate migrations
+`20261021000000`/`20261021000001`, and its chain run reports
+78 · 71 + SKIP · 71 + SKIP · 55 · 72 PASS with step 13 doing real work.
 
 Two things to keep straight about that branch. First, its contents are a parking
 record, not an approval — reopening it is a gate decision, not a coding decision.

@@ -104,20 +104,21 @@ the future Capacitor/Tauri clients can import the same code.
 
 ## Workspace commands (run from the repository root)
 
-| Script                   | Purpose                                    |
-| ------------------------ | ------------------------------------------ |
-| `pnpm dev`               | Start the web dev server                   |
-| `pnpm build`             | Build all workspaces (Turborepo)           |
-| `pnpm lint`              | ESLint across all workspaces               |
-| `pnpm type-check`        | `tsc --noEmit` across all workspaces       |
-| `pnpm test`              | Vitest watch mode (web)                    |
-| `pnpm test:run`          | Vitest once, for CI                        |
-| `pnpm format`            | Prettier write                             |
-| `pnpm format:check`      | Prettier check (used by CI)                |
-| `pnpm db:generate`       | Regenerate the Prisma client               |
-| `pnpm db:migrate`        | Prisma migrate (dev)                       |
-| `pnpm db:migrate:deploy` | Prisma migrate deploy (staging/production) |
-| `pnpm db:seed`           | Seed platform admin                        |
+| Script                   | Purpose                                                    |
+| ------------------------ | ---------------------------------------------------------- |
+| `pnpm dev`               | Start the web dev server                                   |
+| `pnpm build`             | Build all workspaces (Turborepo)                           |
+| `pnpm lint`              | ESLint across all workspaces                               |
+| `pnpm type-check`        | `tsc --noEmit` across all workspaces                       |
+| `pnpm test`              | Vitest watch mode (web)                                    |
+| `pnpm test:run`          | Vitest once, for CI                                        |
+| `pnpm format`            | Prettier write                                             |
+| `pnpm format:check`      | Prettier check (used by CI)                                |
+| `pnpm check:bundles`     | Scan the build output for privileged credentials (proof 8) |
+| `pnpm db:generate`       | Regenerate the Prisma client                               |
+| `pnpm db:migrate`        | Prisma migrate (dev)                                       |
+| `pnpm db:migrate:deploy` | Prisma migrate deploy (staging/production)                 |
+| `pnpm db:seed`           | Seed platform admin                                        |
 
 Per-workspace scripts, e.g. `pnpm --filter @amisibiz/web dev`, `--filter @amisibiz/mobile lint`.
 `pnpm turbo run lint type-check test:run build` runs every gate in dependency order.
@@ -125,11 +126,24 @@ Per-workspace scripts, e.g. `pnpm --filter @amisibiz/web dev`, `--filter @amisib
 ## Automated checks
 
 CI (`.github/workflows/ci.yml`) runs on every push to `main` and on pull
-requests: `pnpm install --frozen-lockfile` → `pnpm format:check` →
-`pnpm turbo run lint type-check test:run build` → a guard that greps the build
-output for the `sb_secret_` pattern. CI uses placeholder environment values
-only; database-backed integration tests are skipped unless `TEST_DATABASE_URL`
-points at a disposable database (**never** the shared Supabase project).
+requests, as two jobs:
+
+- **`verify`** — `pnpm install --frozen-lockfile` → `pnpm format:check` →
+  `pnpm turbo run lint type-check test:run build` → `pnpm check:bundles` → a guard
+  that greps the build output for the `sb_secret_` pattern. Placeholder environment
+  values only; no database is contacted, and the DB-backed suite self-skips unless
+  `TEST_DATABASE_URL` is set.
+- **`security`** — a runner-local PostgreSQL 16 service container, then the
+  committed clean-room chain (`scripts/db/cleanroom-chain.sh`), both behavioural
+  batteries with a FAIL/short-count verdict gate, the 26-case authorization harness
+  as `amisibiz_app`, and three assertions that the environment was real (role
+  attributes, permission-catalog size, harness teardown).
+
+`TEST_DATABASE_URL` must point at a disposable database — **never** the shared
+Supabase project; the harness refuses a Supabase-shaped host by design. Note that
+this workflow has not executed yet: the repository has no remote push, so every
+number quoted for it in `docs/` comes from running the same steps against the
+throwaway cluster (`docs/RUNBOOK.md` §4.3/§4.5).
 
 ## Routes
 
@@ -206,6 +220,7 @@ server/actions/      Server Actions
 - [`docs/implementation/phase-checklist.md`](docs/implementation/phase-checklist.md) — current phase plan and status
 - [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) — status dashboard (what is implemented, what is proven)
 - [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operations: environment variables, the two database connections, RLS activation, verification probes, migration rules, incident response
+- [`docs/administration/rls-activation-operator-procedure.md`](docs/administration/rls-activation-operator-procedure.md) — the step-by-step operator runbook that makes RLS govern the deployed app (credential rotation, `amisibiz_app` password, `APP_DATABASE_URL`, enforcement proof, pending migrations). **Not executed** — live steps need the owner's go-ahead
 - [`docs/implementation/phase-01-foundation-report.md`](docs/implementation/phase-01-foundation-report.md) — application-foundation completion report (monorepo, packages, shells, CI)
 - [`docs/implementation/phase-01-authorization-report.md`](docs/implementation/phase-01-authorization-report.md) — Phase 1 directive report (RBAC catalog, RLS, scoped context) and what is still unproven
 - [`docs/implementation/phase-04.5b-monorepo-and-clients-audit.md`](docs/implementation/phase-04.5b-monorepo-and-clients-audit.md) — monorepo/client-platform audit and plan

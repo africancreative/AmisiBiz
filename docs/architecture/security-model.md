@@ -311,16 +311,16 @@ closed.
 
 **Still open (tracked, not claimed as done)**
 
-| Item                                            | Reason / next step                                                                                                                                        |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PostgreSQL Row-Level Security (RLS)             | **Closed by Phase 1** — policies + guard triggers landed in `20261018000002`; see §13 for why they are not yet _effective_ for the running app.           |
-| Least-privileged database role                  | **Closed by Phase 1 in schema** — `amisibiz_app` (`NOINHERIT`, no `BYPASSRLS`, per-table verbs). Activation is an operator step: `docs/RUNBOOK.md` §3.    |
-| Email transport (verification / reset delivery) | `lib/email` is a documented no-op; **production registration must stay disabled** until a transport is wired and `REQUIRE_EMAIL_VERIFICATION` is enabled. |
-| Distributed rate limiting                       | In-memory only; move to a shared store (Redis/Upstash/Vercel KV) for multi-instance.                                                                      |
-| Invitation token hashing at rest (R8)           | Invitations still store the raw token; migrate to hash-at-rest like `AccountToken`.                                                                       |
-| Unique default membership constraint (R5b)      | `isDefault` is enforced in application logic only; add a partial unique index at the DB level.                                                            |
-| DB-backed integration isolation tests (R7)      | Tests mock Prisma; add ephemeral-Postgres tests (task #37).                                                                                               |
-| Baseline commit / VCS protection (R2)           | Done — `a35c7aa`.                                                                                                                                         |
+| Item                                            | Reason / next step                                                                                                                                                                                                |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL Row-Level Security (RLS)             | **Closed by Phase 1** — policies + guard triggers landed in `20261018000002`; see §13 for why they are not yet _effective_ for the running app.                                                                   |
+| Least-privileged database role                  | **Closed by Phase 1 in schema** — `amisibiz_app` (`NOINHERIT`, no `BYPASSRLS`, per-table verbs). Activation is an operator step: `../administration/rls-activation-operator-procedure.md` / `docs/RUNBOOK.md` §3. |
+| Email transport (verification / reset delivery) | `lib/email` is a documented no-op; **production registration must stay disabled** until a transport is wired and `REQUIRE_EMAIL_VERIFICATION` is enabled.                                                         |
+| Distributed rate limiting                       | In-memory only; move to a shared store (Redis/Upstash/Vercel KV) for multi-instance.                                                                                                                              |
+| Invitation token hashing at rest (R8)           | Invitations still store the raw token; migrate to hash-at-rest like `AccountToken`.                                                                                                                               |
+| Unique default membership constraint (R5b)      | `isDefault` is enforced in application logic only; add a partial unique index at the DB level.                                                                                                                    |
+| DB-backed integration isolation tests (R7)      | Tests mock Prisma; add ephemeral-Postgres tests (task #37).                                                                                                                                                       |
+| Baseline commit / VCS protection (R2)           | Done — `a35c7aa`.                                                                                                                                                                                                 |
 
 ---
 
@@ -465,17 +465,17 @@ what it measures is the policy, not a Prisma `where` clause. It is skipped when
 `TEST_DATABASE_URL` is unset and refuses any host that looks like the shared
 Supabase project.
 
-| #   | Required proof                                                 | Where it is decided                                                                           | Evidence today                                                                                                                                                                    |
-| --- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | An anonymous caller cannot reach private tenant data           | No `anon`/`authenticated` privileges on AmisiBiz tables + middleware gate                     | harness case asserts zero table privileges for those roles when they exist (a vanilla CI PostgreSQL may not have them); **not** yet exercised against the live project            |
-| 2   | Tenant A cannot read Tenant B                                  | `has_tenant_read_access` + `where: { tenantId }`                                              | harness: own rows only, and with no context every tenant-scoped table reads zero; the visible `Tenant` row is the caller's own membership (by design, §13.7)                      |
-| 3   | Tenant A cannot mutate Tenant B                                | `has_tenant_write_access` (no support branch) + the grants underneath it                      | harness: foreign UPDATE matches 0 rows, foreign INSERT violates `WITH CHECK`, and DELETE is refused before the policy even runs — the runtime role holds no DELETE grant          |
-| 4   | A viewer cannot issue documents                                | matrix (`documents.*.issue` absent for `VIEWER`) + `authorizeTenant`                          | harness proof 4: a VIEWER reads its workspace, cannot INSERT an `Item`, and its UPDATE matches 0 rows; the issuance flow itself is Phase 05 work                                  |
-| 5   | A portal user cannot access internal business records          | `CUSTOMER_PORTAL_USER` holds 2 permissions; portal scoping                                    | harness proof 5: a portal seat cannot write and reads zero `AuditLog` rows; portal document/PDF scoping is Phase 05 work                                                          |
-| 6   | Users cannot elevate their own role                            | `users_guard_update`, `tenant_members_guard_role_change`, `platformRole` not self-serviceable | harness proof 6: self-`platformRole` update raises `23514`, own-role escalation matches 0 rows, a suspended tenant cannot reactivate itself, an active tenant cannot self-suspend |
-| 7   | Tenant ids cannot be manipulated to bypass RLS                 | claims are re-derived from rows by `SECURITY DEFINER` helpers                                 | harness proof 7: forged `app.*` GUCs reveal and mutate nothing, a claimed platform-admin flag grants nothing, and `set_tenant_context` refuses a malformed uuid                   |
-| 8   | Privileged database credentials are absent from client bundles | only `NEXT_PUBLIC_*` may reach the client; `SUPABASE_SECRET_KEY` is server-only               | by construction + manual scan; **the automated bundle check is still open (task #37c)**                                                                                           |
-| —   | Storage policies prevent cross-tenant logo access              | `storage.objects` policies                                                                    | schema only — see §13.5                                                                                                                                                           |
+| #   | Required proof                                                 | Where it is decided                                                                           | Evidence today                                                                                                                                                                                                                                                                                                                                                                          |
+| --- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | An anonymous caller cannot reach private tenant data           | No `anon`/`authenticated` privileges on AmisiBiz tables + middleware gate                     | harness case asserts zero table privileges for those roles when they exist (a vanilla CI PostgreSQL may not have them); **not** yet exercised against the live project                                                                                                                                                                                                                  |
+| 2   | Tenant A cannot read Tenant B                                  | `has_tenant_read_access` + `where: { tenantId }`                                              | harness: own rows only, and with no context every tenant-scoped table reads zero; the visible `Tenant` row is the caller's own membership (by design, §13.7)                                                                                                                                                                                                                            |
+| 3   | Tenant A cannot mutate Tenant B                                | `has_tenant_write_access` (no support branch) + the grants underneath it                      | harness: foreign UPDATE matches 0 rows, foreign INSERT violates `WITH CHECK`, and DELETE is refused before the policy even runs — the runtime role holds no DELETE grant                                                                                                                                                                                                                |
+| 4   | A viewer cannot issue documents                                | matrix (`documents.*.issue` absent for `VIEWER`) + `authorizeTenant`                          | harness proof 4: a VIEWER reads its workspace, cannot INSERT an `Item`, and its UPDATE matches 0 rows; the issuance flow itself is Phase 05 work                                                                                                                                                                                                                                        |
+| 5   | A portal user cannot access internal business records          | `CUSTOMER_PORTAL_USER` holds 2 permissions; portal scoping                                    | harness proof 5: a portal seat cannot write and reads zero `AuditLog` rows; portal document/PDF scoping is Phase 05 work                                                                                                                                                                                                                                                                |
+| 6   | Users cannot elevate their own role                            | `users_guard_update`, `tenant_members_guard_role_change`, `platformRole` not self-serviceable | harness proof 6: self-`platformRole` update raises `23514`, own-role escalation matches 0 rows, a suspended tenant cannot reactivate itself, an active tenant cannot self-suspend                                                                                                                                                                                                       |
+| 7   | Tenant ids cannot be manipulated to bypass RLS                 | claims are re-derived from rows by `SECURITY DEFINER` helpers                                 | harness proof 7: forged `app.*` GUCs reveal and mutate nothing, a claimed platform-admin flag grants nothing, and `set_tenant_context` refuses a malformed uuid                                                                                                                                                                                                                         |
+| 8   | Privileged database credentials are absent from client bundles | only `NEXT_PUBLIC_*` may reach the client; `SUPABASE_SECRET_KEY` is server-only               | `pnpm build && pnpm check:bundles` — `scripts/security/scan-client-bundles.mjs` scans `.next/static` + `.next/server` for a `sb_secret_*` value, a decodable service-role JWT, a `service_role` literal, a Postgres URL with an embedded password and inlined JWT-secret material; verified against the real build and against planted fixtures (§13.8), and CI runs it after the build |
+| —   | Storage policies prevent cross-tenant logo access              | `storage.objects` policies                                                                    | schema only — see §13.5                                                                                                                                                                                                                                                                                                                                                                 |
 
 Plus the harness cases that are not among the eight but close the same gaps: the
 Phase 2 suspension split (reads preserved, writes denied, provider branch still
@@ -485,24 +485,33 @@ code↔database permission-catalog and role→permission-matrix parity, and the
 role attributes of `amisibiz_app` itself.
 
 **What is missing to call Phase 1 done:** the operator step that makes any of it
-true for the deployed app (task #38 — set the `amisibiz_app` password, publish
-`APP_DATABASE_URL`, run `pnpm db:assert-rls` and the live probes), the automated
-bundle check for #8, the CI job that runs the harness plus both behavioural
-batteries on every push (task #37d), and Supabase Storage adoption for logos
-(task #36).
+true for the deployed app — task #38, written out step by step in
+`../administration/rls-activation-operator-procedure.md` and summarised in
+`RUNBOOK.md` §3: rotate the compromised credential block, set the `amisibiz_app`
+password, publish `APP_DATABASE_URL`, run `pnpm db:assert-rls` and the live probes,
+then apply the three pending migrations. The two follow-up migrations the harness
+earned (#50 support-branch scope, #51 `timestamptz` windows) are authored and
+verified offline but **not applied to the live project**, which still runs the
+pre-`20261021000000` behaviour. Supabase Storage adoption for logos is task #36.
+Proofs 1–8 now have a tracked
+automated check each, and `ci.yml` carries a `security` job that runs the clean-room
+chain, both batteries and the harness on a disposable Postgres 16 service — but that
+workflow has never executed, because nothing has been pushed.
 
 Reproducibility changed this cycle: the behavioral battery that used to live only
 in git-ignored `.tmp/` scratch files is now in the repository —
-`apps/web/prisma/scripts/rls-behavior-battery.sql` (67 assertions), its
+`apps/web/prisma/scripts/rls-behavior-battery.sql` (72 assertions once the schema
+is fully migrated — 71 PASS plus one SKIP on the frozen 1–11 stages), its
 legacy-shape fixture `apps/web/prisma/scripts/fixtures/phase1-legacy-fixture.sql`
 and the end-to-end driver `scripts/db/cleanroom-chain.sh`, which rebuilds a
 database from nothing (migrations 1–7 → foreign-table PRE probe → fixture →
 8–10 → POST probes → batteries → migration-11 abort probe → 11 → regression
 battery → Phase 2 battery → any later migration in the tree, with the battery run
-again). One run of that driver against a throwaway cluster (`p37_chain3`,
-2026-10-15) produced 78 PASS / 0 FAIL structural checks, 67 PASS battery
-assertions, the expected abort from migration 11 on legacy `planId` text, 55 PASS
-Phase 2 checks, and 67 PASS again after the untracked migration 12.
+again). The chain's last recorded run against a throwaway cluster (`p37_final`,
+2026-10-15) produced 78 PASS / 0 FAIL structural checks, 71 PASS + 1 labelled SKIP
+battery assertions before and after migration 11, the expected abort from migration
+11 on legacy `planId` text, 55 PASS Phase 2 checks, and 72 PASS after step 13
+applied the two harness-earned migrations.
 
 Extending the driver to migration 12 initially printed two FAILs
 (`T2L-a platform tenant visibility: 5 (expect 2)`, `T2L-b … 4 (expect 2)`). The
@@ -518,39 +527,57 @@ over-reachable row) on a database carrying any amount of fixture residue.
 Two behaviours the harness found are recorded in §13.7 rather than quietly
 asserted away — no policy was changed to make a case pass.
 
-### 13.7 Findings from the first DB-backed harness run
+### 13.7 Findings from the first DB-backed harness run — both now closed
 
-**Support access is fenced by the grant, not by the active context.**
-`has_tenant_read_access()` ORs in `is_platform_support() AND
+**Support access was fenced by the grant, not by the active context.**
+`has_tenant_read_access()` ORed in `is_platform_support() AND
 has_support_grant(p_tenant_id)` without also requiring `p_tenant_id =
-current_tenant_id()`. A SUPPORT user holding a grant on tenant A therefore reads
-A's rows even while the session claims tenant B. It is not a cross-tenant leak —
-B's rows stay invisible without a B grant — but it means a support session's
-tenant label is advisory at the row level, so an audit row written under one
-context can accompany reads of another. Tightening that branch (one added
-conjunction in a new migration) is the correct fix; it is deliberately **not**
-done here, because migrations 1–11 are frozen and the owner's gate sequence runs
-#38 → apply 11 → #37 before any further SQL ships.
+current_tenant_id()`. A SUPPORT user holding a grant on tenant A therefore read
+A's rows even while the session claimed tenant B. It is not a cross-tenant leak —
+B's rows stay invisible without a B grant — but it meant a support session's
+tenant label was advisory at the row level, so an audit row written under one
+context could accompany reads of another.
 
-**`timestamp(3) WITHOUT TIME ZONE` window columns are session-timezone
-sensitive.** `SupportAccessGrant.expiresAt` and `Invitation.expiresAt` are naive
+Fixed by `20261021000000_phase1_support_read_access_scoped_to_context`, which adds
+the conjunction `current_tenant_id() IS NULL OR p_tenant_id = current_tenant_id()`
+to that branch only — the member branch and the platform-admin branch are
+unchanged, and no policy was relaxed anywhere. The `IS NULL` alternative keeps the
+provider console working: listing "the tenants I have grants for" is a legitimate
+no-context read, while a session that _does_ name a tenant is fenced to it. Proven
+by harness case "a support grant reads the granted workspace only, and never
+writes" (grant on A + context A visible, grant on A + context B empty, grant on A +
+no context lists only A) and by battery cases `T9i`–`T9m`.
+
+**`timestamp(3) WITHOUT TIME ZONE` window columns were session-timezone
+sensitive.** `SupportAccessGrant.expiresAt` and `Invitation.expiresAt` were naive
 timestamps while Prisma writes UTC instants and the policies compare against
-`now()`. On Supabase (server timezone UTC) the two agree; on a local cluster in
+`now()`. On Supabase (server timezone UTC) the two agreed; on a local cluster in
 `Africa/Nairobi` (+03) every window Prisma created looked three hours shorter,
-which is what first made the support-grant case read zero rows. The harness pins
-the disposable database's timezone to UTC in `beforeAll` so it measures the
-production posture; the underlying column type should become
-`timestamp(3) WITH TIME ZONE` in a follow-up migration so a non-UTC session can
-never shift a support or invitation window. Until then, anything that reads expiry
-against `now()` from a non-UTC connection is untrustworthy — including a
-developer laptop.
+which is what first made the support-grant case read zero rows. The harness had to
+pin the disposable database's timezone to UTC in `beforeAll` so it measured the
+production posture — a workaround that documented the bug rather than fixing it.
+
+Fixed by `20261021000001_phase1_support_and_invitation_windows_are_instants`, which
+converts `SupportAccessGrant.expiresAt/revokedAt/createdAt` and
+`Invitation.expiresAt/acceptedAt` to `timestamp(3) WITH TIME ZONE`
+(`USING <col> AT TIME ZONE 'UTC'`, i.e. existing naive values are reinterpreted as
+the instants they were always meant to be). Both `SupportAccessGrant` CHECK
+constraints are dropped and re-created around the type change, because PostgreSQL
+refuses to alter a column a CHECK depends on. `Invitation.createdAt/updatedAt` are
+deliberately left alone and the reason is recorded in the migration. Proven by
+harness case "a support window is the same instant in every session timezone",
+which reads the granted tenant under `SET LOCAL timezone = 'UTC'` and again under
+`'Africa/Nairobi'` and requires both to see it; with the migration temporarily
+removed that case **fails** (`expected [] to deeply equal [Array(1)]`), which is
+the evidence that it distinguishes the two schemas rather than always passing.
 
 Gate status: the repository half of #37 is met — the proofs above run from tracked
 files against a real PostgreSQL, and nothing was loosened to make a case pass. The
 gate itself still binds, because the other half is operational: with no
 `amisibiz_app` password (task #38) the deployed app would connect as the owner and
-RLS stays inert, and the findings above are unfixed. The document-UI work that
-arrived untracked after the last green gate run, which did not compile, was
+RLS stays inert. The findings above are **fixed in the repository** but **not
+applied to the live project**, which remains at migration 10. The document-UI work
+that arrived untracked after the last green gate run, which did not compile, was
 **parked off `main`** on 2026-10-15 by owner decision (task #52; branch
 `wip/phase05-business-features`, commit `0a67b69`), so `main` is the verified tree
 and these proofs now run on the same tree the ordinary gates pass on. Business
@@ -559,6 +586,43 @@ therefore remains gated by the directive, and by direction rather than by missin
 tests: _"Do not begin business feature development until the core authorization and
 RLS tests pass."_ The Phase 3 gap assessment lives in
 `docs/implementation/phase-01-security-harness-report.md` §8.
+
+### 13.8 Proof 8 automation (#37c) and the CI security job (#37d)
+
+**`scripts/security/scan-client-bundles.mjs`** is the automated half of proof 8. It
+walks `apps/web/.next/static` and `apps/web/.next/server` and reports by structural
+rule — a `sb_secret_*` **value** (prefix plus 8+ key characters, so Supabase's own
+key-format detection code does not trip it), a JWT-shaped service-role token
+(confirmed by decoding the header for `alg`/`typ`), a `"service_role"` literal, a
+Postgres URL carrying a password, and inlined `SUPABASE_JWT_SECRET` assignment
+material. The script contains no real credential and prints only file:line plus a
+redacted excerpt, so it is safe to commit and safe to run in CI. It exits 0 clean, 1
+on findings, 2 when there is no build to scan.
+
+Two validation runs back the claim: against the current `pnpm build` output it reports
+clean, and against a tree with four deliberately planted credential-shaped fixtures it
+reports exactly those four and leaves the legitimate `postgresql://<user>:<password>@`
+placeholders — including our own operator-facing error message — unflagged. The
+false-positive suppression is a shape test (`no angle brackets, no `${}`), not an
+allow-list, so a real password in that position still fails.
+
+**`.github/workflows/ci.yml`** now has a second job, `security`, gated behind `verify`.
+It brings up a `postgres:16-alpine` service as a superuser that is _not_ the application
+role, runs `scripts/db/cleanroom-chain.sh` to rebuild the migration chain from nothing
+and execute both behavioural batteries, runs the 26-case harness against that database,
+then asserts three facts directly in SQL: `amisibiz_app` is `NOINHERIT`, not
+`BYPASSRLS` and not superuser; the `Permission` catalog holds 42 rows; and `Tenant`
+holds 0 rows in the fresh chain. Those three assertions were executed verbatim against
+a local disposable database before being written into the workflow.
+
+The workflow never receives real credentials — CI supplies placeholder values only, and
+`TEST_DATABASE_URL` points at the throwaway service, so the guard in the harness that
+refuses any `*.supabase.co` / `pooler.supabase.com` host is what keeps a CI runner from
+touching the shared project.
+
+**Honest status:** `ci.yml` is authored and its SQL is individually verified, but the
+workflow has **never run**, because this repository has no remote push. Do not describe
+#37d as "green in CI" until a run exists.
 
 ---
 
