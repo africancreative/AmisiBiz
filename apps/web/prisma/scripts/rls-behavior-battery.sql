@@ -511,6 +511,80 @@ BEGIN
 END $$;
 COMMIT;
 
+-- ── Task #50: the grant is necessary but no longer sufficient ────────────────
+-- Migration 20261021000000 fences the SUPPORT branch of `has_tenant_read_access`
+-- with the active tenant context. These cases pin all three postures that branch
+-- can be in, so the tightening cannot silently regress.
+
+BEGIN;
+SET LOCAL ROLE amisibiz_app;
+SELECT public.set_tenant_context(current_setting('test.ta'), current_setting('test.u1'), 'TENANT_OWNER', true, false);
+DO $$
+BEGIN
+    INSERT INTO "SupportAccessGrant" ("id","tenantId","platformUserId","grantedById","reason","expiresAt","createdAt")
+    VALUES (gen_random_uuid(), current_setting('test.ta')::uuid, current_setting('test.u4')::uuid, current_setting('test.u1')::uuid, 'Battery: context scoping proof', now() + interval '1 hour', now());
+    RAISE NOTICE 'T9i grant on A re-issued: PASS';
+END $$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE amisibiz_app;
+-- u4 claims tenant B while its only live grant is on A. Before #50 this session
+-- read A's rows under a B label; the only correct answer now is nothing at all,
+-- because B was never granted either.
+SELECT public.set_tenant_context(current_setting('test.tb'), current_setting('test.u4'), 'VIEWER', false, true);
+DO $$
+DECLARE n bigint; fenced boolean;
+BEGIN
+    SELECT count(*) INTO n FROM "Contact";
+    -- The clean-room driver runs this same battery twice on purpose: once against
+    -- the frozen 1..11 chain, where this branch is still loose by construction,
+    -- and once after the tree's follow-up migrations, where the fence must hold.
+    -- `app.support_context_fenced` says which of those schemas is under test
+    -- (PGOPTIONS in scripts/db/cleanroom-chain.sh); unset means "the current
+    -- tree", so a hand-run battery asserts the fence.
+    fenced := COALESCE(current_setting('app.support_context_fenced', true), 'true') <> 'false';
+    IF fenced THEN
+        RAISE NOTICE 'T9j grant on A, context B: % (expect 0) %', n, CASE WHEN n=0 THEN 'PASS' ELSE 'FAIL' END;
+    ELSE
+        -- A historical probe is not a free pass: even with the loose branch, the
+        -- GRANT still bounds what a support session can reach. Seeing more than
+        -- the one granted workspace's rows here is a real failure either way.
+        RAISE NOTICE 'T9j grant on A, context B: % (SKIP - pre-fence schema; grant still bounds it to 1) %', n, CASE WHEN n <= 1 THEN 'OK' ELSE 'FAIL' END;
+    END IF;
+END $$;
+COMMIT;
+
+BEGIN;
+SET LOCAL ROLE amisibiz_app;
+-- No tenant context is the provider console's own posture while it lists the
+-- workspaces it may enter (packages/database/src/scope.ts keeps tenantId null
+-- there). The granted workspace stays listed; entering it sets the context and
+-- the row fence above applies.
+SELECT public.set_tenant_context(NULL, current_setting('test.u4'), NULL, false, true);
+DO $$
+DECLARE n bigint;
+BEGIN
+    SELECT count(*) INTO n FROM "Contact";
+    RAISE NOTICE 'T9k grant on A, no context: % (expect 1) %', n, CASE WHEN n=1 THEN 'PASS' ELSE 'FAIL' END;
+    SELECT count(*) INTO n FROM "Tenant";
+    RAISE NOTICE 'T9l granted workspace listed: % (expect 1) %', n, CASE WHEN n=1 THEN 'PASS' ELSE 'FAIL' END;
+END $$;
+COMMIT;
+
+-- Leave no live grant behind (the purge block at the top is the backstop).
+BEGIN;
+SET LOCAL ROLE amisibiz_app;
+SELECT public.set_tenant_context(current_setting('test.ta'), current_setting('test.u1'), 'TENANT_OWNER', true, false);
+DO $$
+DECLARE n bigint;
+BEGIN
+    UPDATE "SupportAccessGrant" SET "revokedAt"=now() WHERE "platformUserId"=current_setting('test.u4')::uuid AND "revokedAt" IS NULL;
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE 'T9m context proof grant revoked: % (expect 1) %', n, CASE WHEN n=1 THEN 'PASS' ELSE 'FAIL' END;
+END $$;
+COMMIT;
+
 \echo '=== T10: storage policies (authenticated, JWT-sub simulation) ==='
 -- Reset and plant the foreign-tenant object as the owner (bypasses RLS — it
 -- models an object another tenant uploaded earlier).

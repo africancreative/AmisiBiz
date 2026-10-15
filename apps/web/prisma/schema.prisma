@@ -318,9 +318,12 @@ model SupportAccessGrant {
   platformUserId String    @db.Uuid
   grantedById    String?   @db.Uuid
   reason         String // Business justification — required, never empty
-  expiresAt      DateTime
-  revokedAt      DateTime?
-  createdAt      DateTime  @default(now())
+  // Windows are instants, not wall-clock times: `has_support_grant()` compares
+  // `expiresAt` against `now()`, so these columns must be timezone-independent.
+  // See migrations/20261021000001 and docs/architecture/security-model.md §13.7.
+  expiresAt      DateTime  @db.Timestamptz(3)
+  revokedAt      DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
 
   tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   platformUser User   @relation("SupportGrantsReceived", fields: [platformUserId], references: [id], onDelete: Cascade)
@@ -869,8 +872,10 @@ model Invitation {
   tokenHash  String           @unique // SHA-256 hash of the invitation token
   status     InvitationStatus @default(PENDING)
   invitedBy  String           @db.Uuid // userId of inviter
-  expiresAt  DateTime
-  acceptedAt DateTime?
+  // The acceptance window is an instant — see the note on
+  // SupportAccessGrant.expiresAt and migration 20261021000001.
+  expiresAt  DateTime         @db.Timestamptz(3)
+  acceptedAt DateTime?        @db.Timestamptz(3)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

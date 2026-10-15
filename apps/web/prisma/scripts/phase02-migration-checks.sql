@@ -825,4 +825,7 @@ END $$;
 ROLLBACK;
 
 \echo ''
-\echo '=== phase02 battery complete (grep the output above for FAIL) ==='
+\echo '=== phase02 battery complete — read the verdicts above ==='
+-- The word that marks a failed assertion must not appear in any trailer line:
+-- CI (.github/workflows/ci.yml, `security` job) greps the captured logs for that
+-- literal marker, so an echo reminder here would fail every run. Keep it wording-free.

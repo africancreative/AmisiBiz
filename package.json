@@ -16,6 +16,7 @@
     "test:run": "turbo run test:run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "check:bundles": "node scripts/security/scan-client-bundles.mjs",
     "db:generate": "pnpm --filter @amisibiz/web db:generate",
     "db:migrate": "pnpm --filter @amisibiz/web db:migrate",
     "db:migrate:deploy": "pnpm --filter @amisibiz/web db:migrate:deploy",

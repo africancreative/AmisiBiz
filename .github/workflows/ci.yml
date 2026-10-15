@@ -1,12 +1,19 @@
 # AmisiBiz — continuous integration.
 #
-# Runs the same gates that every phase must pass locally: format check, lint,
-# type-check, unit/contract tests and the production build, across every
-# workspace via Turborepo.
+# Two jobs, and they prove different things.
 #
-# This workflow never receives real credentials. Database-backed integration
-# tests are skipped automatically (they run only when TEST_DATABASE_URL is set
-# and must point at a disposable database — never the shared Supabase project).
+#   verify    — format, lint, type-check, the mocked unit/contract suites, the
+#               production build, and proof 8 (no privileged credential reached
+#               the client bundle). Safe anywhere; no database is contacted.
+#   security  — a runner-local PostgreSQL 16 the job creates, migrates and
+#               destroys: the committed clean-room chain, both behavioural
+#               batteries, and the 26-case authorization harness running as the
+#               amisibiz_app role. This is the job that stopped the RLS claims
+#               from depending on one developer's laptop (#37d).
+#
+# Neither job receives real credentials. The harness additionally refuses any
+# TEST_DATABASE_URL whose host looks like the shared Supabase project, so a
+# misconfigured secret here fails the job instead of touching production data.
 
 name: CI
 
@@ -66,6 +73,9 @@ jobs:
       - name: Lint, type-check, test, build
         run: pnpm turbo run lint type-check test:run build
 
+      - name: Proof 8 — no privileged credential reached the client bundle
+        run: pnpm check:bundles
+
       - name: Guard — no Supabase secret key value in build output
         run: |
           # Matches a value-shaped secret key ("sb_secret_" + 20+ key chars).
@@ -76,3 +86,130 @@ jobs:
             exit 1
           fi
           echo "OK: no 'sb_secret_<value>' pattern in the Next.js build output."
+
+  # ---------------------------------------------------------------------------
+  # The proofs that a mock cannot give: real PostgreSQL, real policies, real
+  # runtime role. #37b's harness and the committed batteries run here so the
+  # eight required security properties stop depending on somebody's laptop.
+  #
+  # Every database in this job is created by the runner and destroyed with it.
+  # Nothing here can reach the shared Supabase project: no project credentials
+  # are configured for the job, and the harness additionally refuses any
+  # TEST_DATABASE_URL whose host looks like Supabase.
+  # ---------------------------------------------------------------------------
+  security:
+    name: RLS proofs against PostgreSQL
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-superuser
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -q"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ci-only-superuser
+      # Disposable, runner-local, and the only database the harness may use.
+      TEST_DATABASE_URL: "postgresql://postgres:ci-only-superuser@localhost:5432/amisibiz_rls"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install the PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+        # The service container is Alpine; the runner image supplies psql.
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Wait for PostgreSQL
+        run: |
+          until pg_isready -h "$PGHOST" -p "$PGPORT" -U postgres -q; do sleep 1; done
+          psql -Atc "SELECT 'server='||version()" | head -1
+
+      - name: Clean-room chain — migrations 1..11, fixture, abort probe, both batteries
+        run: sh scripts/db/cleanroom-chain.sh ci_chain
+
+      - name: Fail the job if any battery reported FAIL or ran short
+        run: |
+          set -euo pipefail
+          # The driver prints PASS/FAIL verdict lines into ignored .tmp/ logs and
+          # does not itself exit non-zero for a failed assertion, so the logs are
+          # the verdict. Two independent conditions must hold: no failure marker
+          # anywhere, and each battery at least as long as the committed count.
+          # A battery that died halfway would otherwise look like a shorter pass.
+          if grep -rn "FAIL" .tmp/cleanroom_*.log; then
+            echo "::error::a battery assertion failed — see the log lines above"
+            exit 1
+          fi
+          # floor:file — the counts are what the same chain produces locally
+          # (docs/RUNBOOK.md §4.3): 78 structural checks, the behaviour battery at
+          # 71 PASS + 1 labelled SKIP while the schema is still the frozen 1..11
+          # chain (the support-context fence does not exist yet at that stage), and
+          # 72 once the tree's follow-up migrations land. Raise them deliberately
+          # when a battery grows.
+          for spec in "78:cleanroom_phase1_checks" "71:cleanroom_rls_battery" \
+                      "71:cleanroom_rls_battery_after11" "55:cleanroom_phase2_battery" \
+                      "72:cleanroom_rls_battery_after_latest"; do
+            floor="${spec%%:*}"; name="${spec##*:}"
+            # `|| true` — grep exits non-zero when it finds nothing, and `set -e`
+            # would otherwise abort on a truncated log before the floor can name
+            # the file. The comparison below is the check that must report it.
+            got=$(grep -c 'PASS' ".tmp/${name}.log" || true)
+            if [ "$got" -lt "$floor" ]; then
+              echo "::error::${name}: ${got} PASS lines, expected at least ${floor}"
+              exit 1
+            fi
+            echo "OK: ${name} ${got} PASS (floor ${floor})"
+          done
+
+      - name: DB-backed authorization harness (26 proofs as amisibiz_app)
+        run: pnpm --filter @amisibiz/web exec vitest run tests/integration-security.test.ts
+
+      - name: Assert the proofs were real, not vacuous
+        run: |
+          # A green job that proved nothing is the failure mode this whole phase
+          # exists to avoid. Three independent checks that the environment the
+          # proofs depend on was actually present:
+          #   1. the runtime role exists and cannot bypass row-level security,
+          #   2. the harness database carries the migrated catalog,
+          #   3. the harness cleaned up after itself (a leak here would make later
+          #      runs measure residue).
+          set -euo pipefail
+          psql -d amisibiz_rls -v ON_ERROR_STOP=1 -Atc "
+            SELECT CASE
+              WHEN EXISTS (SELECT 1 FROM pg_roles
+                           WHERE rolname='amisibiz_app' AND NOT rolbypassrls AND NOT rolsuper AND rolinherit=false)
+              THEN 'OK: amisibiz_app exists, NOINHERIT, no BYPASSRLS'
+            ELSE 'FAIL: amisibiz_app is missing or privileged' END;" | grep '^OK:'
+          psql -d amisibiz_rls -v ON_ERROR_STOP=1 -Atc "
+            SELECT CASE WHEN (SELECT count(*) FROM \"Permission\")=42
+              THEN 'OK: permission catalog holds 42 rows'
+            ELSE 'FAIL: catalog is '||(SELECT count(*) FROM \"Permission\") END;" | grep '^OK:'
+          psql -d amisibiz_rls -v ON_ERROR_STOP=1 -Atc "
+            SELECT CASE WHEN (SELECT count(*) FROM \"Tenant\")=0
+              THEN 'OK: harness teardown left no fixture rows'
+            ELSE 'FAIL: '||(SELECT count(*) FROM \"Tenant\")||' fixture tenants remain' END;" | grep '^OK:'

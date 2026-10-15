@@ -62,14 +62,15 @@ apply() { # apply() <migration-dir-name>
 }
 
 echo "=== 2. legacy migrations (1..7)"
-for m in $(ls -1 "$MIG" | grep '^2'); do
-    case $m in
-        # 8..10 are the Phase 1 migrations (applied after the fixture), 11 is
-        # probed separately below, and 12 (the Phase 05-era portal-linkage
-        # migration, still uncommitted) belongs AFTER 11 like any real deploy.
-        # Skipping it here is what keeps step 2 honest as "migrations 1..7".
-        20261018000000* | 20261018000001* | 20261018000002* | 20261019000000* | 20261020000000*) continue ;;
-    esac
+# Everything from the Phase 1 rewrite onward belongs to the later steps, which
+# apply it in a specific order around the fixture and the abort probe. Names here
+# are zero-padded timestamps, so a prefix cutoff against the first Phase 1
+# migration is stable: a new migration added tomorrow lands in step 13, not here.
+# (An earlier version listed the skipped names; the first follow-up migration the
+# harness earned was then applied before `current_tenant_id()` became uuid, and
+# failed with "operator does not exist: uuid = text".)
+CUTOFF=20261018000000
+for m in $(ls -1 "$MIG" | grep '^2' | awk -v cut="$CUTOFF" '$0 < cut' | sort); do
     apply "$m"
 done
 
@@ -105,7 +106,11 @@ echo "--- PASS lines: $(grep -c 'PASS' "$LOGDIR/cleanroom_phase1_checks.log")"
 grep -n 'FAIL' "$LOGDIR/cleanroom_phase1_checks.log" || echo "--- phase01 checks: no FAIL lines"
 
 echo "=== 8. behaviour battery as amisibiz_app (rls-behavior-battery.sql)"
-$PSQL -d "$DB" -q -f "$SCRIPTS/rls-behavior-battery.sql" > "$LOGDIR/cleanroom_rls_battery.log" 2>&1 \
+# The support-context fence (T9j) does not exist yet at this point in the chain —
+# migration 20261021000000 adds it in step 13 — so the battery is told which
+# schema it is measuring. See the T9j block in that file.
+PGOPTIONS='-c app.support_context_fenced=false' \
+  $PSQL -d "$DB" -q -f "$SCRIPTS/rls-behavior-battery.sql" > "$LOGDIR/cleanroom_rls_battery.log" 2>&1 \
     || echo "rls battery exited non-zero — inspect $LOGDIR/cleanroom_rls_battery.log"
 echo "--- PASS lines: $(grep -c 'PASS' "$LOGDIR/cleanroom_rls_battery.log")"
 grep -n 'FAIL' "$LOGDIR/cleanroom_rls_battery.log" || echo "--- rls battery: no FAIL lines"
@@ -132,7 +137,8 @@ $PSQL -d "$DB" -Atc "SELECT 'role matrix='||count(*) FROM \"RolePermission\";"
 $PSQL -d "$DB" -Atc "SELECT 'planId type='||data_type FROM information_schema.columns WHERE table_name='Tenant' AND column_name='planId';"
 
 echo "=== 11. behaviour battery again — Phase 1 regression on top of migration 11"
-$PSQL -d "$DB" -q -f "$SCRIPTS/rls-behavior-battery.sql" > "$LOGDIR/cleanroom_rls_battery_after11.log" 2>&1 \
+PGOPTIONS='-c app.support_context_fenced=false' \
+  $PSQL -d "$DB" -q -f "$SCRIPTS/rls-behavior-battery.sql" > "$LOGDIR/cleanroom_rls_battery_after11.log" 2>&1 \
     || echo "rls battery exited non-zero — inspect $LOGDIR/cleanroom_rls_battery_after11.log"
 echo "--- PASS lines: $(grep -c 'PASS' "$LOGDIR/cleanroom_rls_battery_after11.log")"
 grep -n 'FAIL' "$LOGDIR/cleanroom_rls_battery_after11.log" || echo "--- phase1 battery: no FAIL lines"
@@ -144,21 +150,23 @@ echo "--- PASS lines: $(grep -c 'PASS' "$LOGDIR/cleanroom_phase2_battery.log")"
 grep -n 'FAIL\|ERROR' "$LOGDIR/cleanroom_phase2_battery.log" || echo "--- phase2 battery: no FAIL/ERROR lines"
 
 echo "=== 13. later migrations, in deploy order, when they exist"
-# The committed chain ends at 11. Anything after it (today: the uncommitted
-# `20261020000000_phase05_portal_linkage`) is applied only if the working tree
-# carries it, so this script stays truthful about a fresh clone.
-for m in $(ls -1 "$MIG" | grep '^2' | sort); do
+# The committed chain ends at 11. Anything after it — today the two harness
+# follow-ups (#50 support-context scoping, #51 timezone-safe window columns), and
+# tomorrow the `20261020000000_phase05_portal_linkage` that only exists on the
+# parked branch — is applied only if the working tree carries it, so this script
+# stays truthful about a fresh clone. Steps 5 and 10 already own 11's group.
+for m in $(ls -1 "$MIG" | grep '^2' | awk -v cut="$CUTOFF" '$0 >= cut' | sort); do
     case $m in
-        20261020000000* | 2026102*)
-            case $m in
-                20261018000000* | 20261018000001* | 20261018000002* | 20261019000000*) continue ;;
-            esac
-            apply "$m"
-            ;;
+        20261018000000* | 20261018000001* | 20261018000002* | 20261019000000*) continue ;;
     esac
+    apply "$m"
 done
 $PSQL -d "$DB" -Atc "SELECT 'catalog after later migrations='||count(*) FROM \"Permission\";"
-$PSQL -d "$DB" -q -f "$SCRIPTS/rls-behavior-battery.sql" > "$LOGDIR/cleanroom_rls_battery_after_latest.log" 2>&1 \
+# This is the run that describes the tree as it stands: every follow-up migration
+# the repository carries has now been applied, so the support-context fence is
+# asserted for real rather than skipped.
+PGOPTIONS='-c app.support_context_fenced=true' \
+  $PSQL -d "$DB" -q -f "$SCRIPTS/rls-behavior-battery.sql" > "$LOGDIR/cleanroom_rls_battery_after_latest.log" 2>&1 \
     || echo "rls battery exited non-zero — inspect $LOGDIR/cleanroom_rls_battery_after_latest.log"
 echo "--- PASS lines after the latest migration: $(grep -c 'PASS' "$LOGDIR/cleanroom_rls_battery_after_latest.log")"
 grep -n 'FAIL' "$LOGDIR/cleanroom_rls_battery_after_latest.log" || echo "--- battery after latest: no FAIL lines"

@@ -64,6 +64,18 @@ function assertDisposable(url: string): void {
 
 const describeDb = TEST_DATABASE_URL ? describe : describe.skip;
 
+/**
+ * `SET LOCAL timezone = ...` cannot take a bound parameter, so the name is
+ * validated against the shape a timezone identifier can have and then quoted.
+ * Only the harness's own literals reach here.
+ */
+function sqlLiteral(value: string): string {
+  if (!/^[A-Za-z0-9_+/ -]+$/.test(value)) {
+    throw new Error(`Refusing to interpolate an unsafe SQL literal: ${value}`);
+  }
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 /** Fixture handles, created once by the owner and torn down at the end. */
 type Fixtures = {
   tenantA: string; // ACTIVE, owns contactA/itemA
@@ -104,11 +116,23 @@ describeDb("database-backed authorization proofs (as amisibiz_app)", () => {
       userId: string;
       role: string | null;
       platform?: boolean;
+      /**
+       * Opens the transaction in a specific session timezone. Used by the window
+       * proof: a `timestamp WITHOUT TIME ZONE` column means different instants to
+       * connections in different zones, which is what migration 20261021000001
+       * removes.
+       */
+      timezone?: string;
     },
     fn: (tx: PrismaClient) => Promise<T>,
   ): Promise<T> {
     return owner.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SET LOCAL ROLE amisibiz_app`);
+      if (scope.timezone) {
+        await tx.$executeRawUnsafe(
+          `SET LOCAL timezone = ${sqlLiteral(scope.timezone)}`,
+        );
+      }
       await tx.$queryRawUnsafe(
         `SELECT public.set_tenant_context($1, $2, $3, $4, false)::text AS ok`,
         scope.tenantId,
@@ -935,29 +959,29 @@ describeDb("database-backed authorization proofs (as amisibiz_app)", () => {
     );
     expect(granted.map((r) => r.id)).toEqual([fx.contactA]);
 
+    // Task #50: the support branch of `has_tenant_read_access` is fenced by the
+    // ACTIVE CONTEXT as well as by the grant. A session that claims tenant B must
+    // see neither B's rows (no grant) nor A's rows (grant, wrong context) — the
+    // grant alone used to be enough, which is the behaviour the first harness run
+    // surfaced and recorded in docs/architecture/security-model.md §13.7.
     const elsewhere = await asApp(
       { tenantId: fx.tenantB, userId: fx.support, role: null },
       (tx) =>
         tx.$queryRaw<{ id: string; tenantId: string }[]>`
           SELECT "id", "tenantId" FROM "Contact"`,
     );
-    // Two things are proven here, and the second is a documented nuance rather
-    // than a passing grade:
-    //   1. No row belonging to an ungranted workspace is readable — B's contact
-    //      never appears, whichever context the session claims.
-    //   2. The granted workspace's rows stay readable even while the session
-    //      claims a different tenant, because `has_tenant_read_access`'s support
-    //      branch tests the GRANT, not the context GUC. The grant is therefore
-    //      the fence for support access. That is not a cross-tenant leak, but it
-    //      does mean a support session's active-tenant label is not enforced at
-    //      the row level; tightening it (adding `p_tenant_id =
-    //      current_tenant_id()` to that branch) is tracked as a follow-up
-    //      migration in docs/IMPLEMENTATION_STATUS.md, not weakened here.
-    expect(
-      elsewhere
-        .map((r) => r.tenantId)
-        .filter((tenantId) => tenantId === fx.tenantB),
-    ).toEqual([]);
+    expect(elsewhere).toEqual([]);
+
+    // The one case that stays open is the provider console's own listing: a
+    // support session with no tenant context may still see the workspaces it is
+    // granted on, before it enters any of them. Per-workspace reads then go
+    // through `authorizePlatformTenant(...)`, which sets that tenant's context —
+    // so the row fence above is what guards them, not the grant alone.
+    const unscoped = await asApp(
+      { tenantId: null, userId: fx.support, role: null },
+      (tx) => tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Contact"`,
+    );
+    expect(unscoped.map((r) => r.id)).toEqual([fx.contactA]);
 
     await expect(
       asApp({ tenantId: fx.tenantA, userId: fx.support, role: null }, (tx) =>
@@ -970,6 +994,43 @@ describeDb("database-backed authorization proofs (as amisibiz_app)", () => {
     await owner.contact.deleteMany({
       where: { tenantId: fx.tenantA, firstName: "SupportWrite" },
     });
+  });
+
+  it("a support window is the same instant in every session timezone", async () => {
+    // Task #51. `has_support_grant()` asks `expiresAt > now()`. While the column
+    // was `timestamp(3) WITHOUT TIME ZONE`, a connection in Africa/Nairobi (+03)
+    // reinterpreted the UTC wall time Prisma had written as local time, so a
+    // window that opened for an hour read as already closed — the effect that
+    // first made the support path read nothing at all. `createdAt`/`expiresAt` in
+    // the fixture below are written exactly the way the server actions write them.
+    const grant = await owner.supportAccessGrant.create({
+      data: {
+        tenantId: fx.tenantX,
+        platformUserId: fx.support,
+        reason: "Harness: the window is an instant",
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+    try {
+      const inUtc = await asApp(
+        { tenantId: fx.tenantX, userId: fx.support, role: null },
+        (tx) => tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Tenant"`,
+      );
+      const inNairobi = await asApp(
+        {
+          tenantId: fx.tenantX,
+          userId: fx.support,
+          role: null,
+          timezone: "Africa/Nairobi",
+        },
+        (tx) => tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Tenant"`,
+      );
+      // One granted workspace, seen identically from both sessions.
+      expect(inUtc.map((r) => r.id)).toEqual([fx.tenantX]);
+      expect(inNairobi.map((r) => r.id)).toEqual([fx.tenantX]);
+    } finally {
+      await owner.supportAccessGrant.delete({ where: { id: grant.id } });
+    }
   });
 
   // ─── Append-only audit, least privilege over foreign objects ───────────────
