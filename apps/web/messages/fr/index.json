@@ -113,7 +113,55 @@
     "trial": {
       "banner": "Vous êtes en période d'essai. {days} jours restants.",
       "upgrade": "Mettre à niveau"
-    }
+    },
+    "stats": {
+      "contacts": "Contacts",
+      "contactsHint": "{active} actifs",
+      "items": "Articles du catalogue",
+      "itemsHint": "{active} actifs",
+      "quotations": "Devis",
+      "quotationsHint": "{open} en cours",
+      "invoices": "Factures",
+      "invoicesHint": "{outstanding} impayées"
+    },
+    "recentDocuments": "Documents récents",
+    "recentDocumentsDescription": "Les derniers devis, factures et bons de livraison de cet espace de travail.",
+    "recentDocumentsEmpty": "Aucun document pour l'instant",
+    "recentDocumentsEmptyDescription": "Les devis, factures et bons de livraison que vous créez apparaîtront ici, du plus récent au plus ancien.",
+    "outstandingInvoices": "Factures impayées",
+    "outstandingInvoicesDescription": "Facturé et non encore réglé. Le suivi des paiements arrivera avec le module documents.",
+    "outstandingInvoicesEmpty": "Rien à recouvrer",
+    "outstandingInvoicesEmptyDescription": "Aucune facture émise n'attend de paiement.",
+    "outstandingTotal": "Total impayé",
+    "outstandingCount": "{count} factures",
+    "overdueCount": "{count} en retard",
+    "account": "Compte et image de marque",
+    "accountDescription": "Le statut de l'espace de travail et l'identité affichée sur vos documents.",
+    "accountFields": {
+      "name": "Entreprise",
+      "status": "Statut",
+      "slug": "Identifiant de l'espace",
+      "role": "Votre rôle",
+      "currency": "Devise",
+      "timezone": "Fuseau horaire",
+      "branding": "Image des documents",
+      "noBranding": "Image par défaut"
+    },
+    "quickActionsDescription": "Accédez aux modules de l'espace de travail.",
+    "quick": {
+      "contacts": "Contacts",
+      "contactsHint": "Gérez les personnes et entreprises avec qui vous travaillez",
+      "items": "Articles du catalogue",
+      "itemsHint": "Les produits et services que vous vendez",
+      "documents": "Documents",
+      "documentsHint": "Devis, factures et bons de livraison",
+      "documentsSoon": "Arrive avec le module documents",
+      "branding": "Image de marque",
+      "brandingHint": "Couleurs et logo sur vos documents"
+    },
+    "createHint": "Les nouveaux documents se créent depuis le module documents.",
+    "draft": "Brouillon",
+    "noCustomer": "Aucun client"
   },
   "team": {
     "title": "Équipe",
@@ -175,9 +223,13 @@
     },
     "documents": {
       "title": "Documents",
-      "description": "Devis, factures et autres documents commerciaux.",
+      "description": "Devis, factures et bons de livraison.",
       "emptyTitle": "Aucun document pour l'instant",
-      "emptyDescription": "Les documents que vous créez apparaîtront ici. Le module documents arrive dans une phase ultérieure."
+      "emptyDescription": "Les devis, factures et bons de livraison que vous créerez apparaîtront ici.",
+      "newDocument": {
+        "title": "Nouveau document",
+        "description": "Un brouillon n'est ni numéroté ni officiel tant que vous ne l'avez pas émis."
+      }
     }
   },
   "documentEnums": {
@@ -461,8 +513,11 @@
       "defaultFooter": "Pied de page des documents",
       "paymentInstructions": "Instructions de paiement",
       "logo": "Logo",
-      "logoAbsent": "Aucun logo n'est stocké pour cet espace de travail. Le téléversement du logo se fait dans l'écran branding de l'entreprise.",
-      "logoLocked": "Les logos passent par le flux de téléversement, qui valide le fichier avant de le stocker. Cette console peut afficher le logo mais pas le remplacer.",
+      "logoEmpty": "Aucun logo n'est encore stocké pour cet espace de travail.",
+      "logoHint": "PNG, JPEG ou WebP, jusqu'à 5 Mo et 2000x2000 pixels. Le téléversement remplace le logo actuel.",
+      "logoUpload": "Téléverser le logo",
+      "logoUploading": "Téléversement du logo…",
+      "logoUploadFailed": "Le logo n'a pas pu être téléversé. Vérifiez le fichier et réessayez.",
       "colorPicker": "Choisir une couleur pour {label}",
       "previewTitle": "Aperçu des documents",
       "save": "Enregistrer le branding",

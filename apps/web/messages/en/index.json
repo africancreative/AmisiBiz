@@ -113,7 +113,55 @@
     "trial": {
       "banner": "You are on a free trial. {days} days remaining.",
       "upgrade": "Upgrade now"
-    }
+    },
+    "stats": {
+      "contacts": "Contacts",
+      "contactsHint": "{active} active",
+      "items": "Catalogue items",
+      "itemsHint": "{active} active",
+      "quotations": "Quotations",
+      "quotationsHint": "{open} open",
+      "invoices": "Invoices",
+      "invoicesHint": "{outstanding} outstanding"
+    },
+    "recentDocuments": "Recent documents",
+    "recentDocumentsDescription": "The latest quotations, invoices and delivery notes for this workspace.",
+    "recentDocumentsEmpty": "No documents yet",
+    "recentDocumentsEmptyDescription": "Quotations, invoices and delivery notes you create will appear here, newest first.",
+    "outstandingInvoices": "Outstanding invoices",
+    "outstandingInvoicesDescription": "Invoiced and not yet settled. Payment tracking arrives with the documents module.",
+    "outstandingInvoicesEmpty": "Nothing outstanding",
+    "outstandingInvoicesEmptyDescription": "No issued invoice is awaiting payment.",
+    "outstandingTotal": "Total outstanding",
+    "outstandingCount": "{count} invoices",
+    "overdueCount": "{count} overdue",
+    "account": "Account and branding",
+    "accountDescription": "The workspace status and the identity shown on your documents.",
+    "accountFields": {
+      "name": "Business",
+      "status": "Status",
+      "slug": "Workspace slug",
+      "role": "Your role",
+      "currency": "Currency",
+      "timezone": "Timezone",
+      "branding": "Document branding",
+      "noBranding": "Default branding"
+    },
+    "quickActionsDescription": "Jump to the workspace modules.",
+    "quick": {
+      "contacts": "Contacts",
+      "contactsHint": "Manage the people and companies you work with",
+      "items": "Catalogue items",
+      "itemsHint": "Products and services you sell",
+      "documents": "Documents",
+      "documentsHint": "Quotations, invoices and delivery notes",
+      "documentsSoon": "Arrives with the documents module",
+      "branding": "Branding",
+      "brandingHint": "Colours and logo on your documents"
+    },
+    "createHint": "New documents are created from the documents module.",
+    "draft": "Draft",
+    "noCustomer": "No customer"
   },
   "team": {
     "title": "Team",
@@ -175,9 +223,13 @@
     },
     "documents": {
       "title": "Documents",
-      "description": "Quotes, invoices and other business documents.",
+      "description": "Quotations, invoices and delivery notes.",
       "emptyTitle": "No documents yet",
-      "emptyDescription": "Documents you create will appear here. The documents module arrives in a later phase."
+      "emptyDescription": "Quotations, invoices and delivery notes you create will appear here.",
+      "newDocument": {
+        "title": "New document",
+        "description": "A draft is not numbered and not part of your records until you issue it."
+      }
     }
   },
   "documentEnums": {
@@ -461,8 +513,11 @@
       "defaultFooter": "Document footer",
       "paymentInstructions": "Payment instructions",
       "logo": "Logo",
-      "logoAbsent": "No logo is stored for this workspace. Logo upload happens in the business's own branding screen.",
-      "logoLocked": "Logos arrive through the upload flow, which validates the file before storing it. This console can show the logo but cannot replace it.",
+      "logoEmpty": "No logo is stored for this workspace yet.",
+      "logoHint": "PNG, JPEG or WebP, up to 5 MB and 2000x2000 pixels. Uploading replaces the current logo.",
+      "logoUpload": "Upload logo",
+      "logoUploading": "Uploading logo…",
+      "logoUploadFailed": "The logo could not be uploaded. Check the file and try again.",
       "colorPicker": "Pick a colour for {label}",
       "previewTitle": "Document preview",
       "save": "Save branding",

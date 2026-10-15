@@ -48,6 +48,26 @@ export const AUDIT_ACTIONS = {
   CONTACT_ITEM_CREATED: "contactItem.created",
   CONTACT_ITEM_UPDATED: "contactItem.updated",
   CONTACT_ITEM_REMOVED: "contactItem.removed",
+  // Phase 05 — the document engine. A document is not edited after issuance;
+  // these events record lifecycle *facts* (an issue, a void, a payment) rather
+  // than field edits, which is the same distinction the audit trail draws for
+  // payments: recording a payment is an event, setting a status is not.
+  DOCUMENT_CREATED: "document.created",
+  DOCUMENT_UPDATED: "document.updated",
+  DOCUMENT_ISSUED: "document.issued",
+  DOCUMENT_VOIDED: "document.voided",
+  DOCUMENT_QUOTATION_ACCEPTED: "document.quotationAccepted",
+  DOCUMENT_QUOTATION_REJECTED: "document.quotationRejected",
+  DOCUMENT_QUOTATION_EXPIRED: "document.quotationExpired",
+  DOCUMENT_QUOTATION_CANCELLED: "document.quotationCancelled",
+  DOCUMENT_CONVERTED: "document.converted",
+  DOCUMENT_PAYMENT_RECORDED: "document.paymentRecorded",
+  DOCUMENT_PAYMENT_REVERSED: "document.paymentReversed",
+  DOCUMENT_DELIVERY_RECORDED: "document.deliveryRecorded",
+  DOCUMENT_DELIVERED: "document.delivered",
+  DOCUMENT_DOWNLOADED: "document.downloaded",
+  DOCUMENT_PORTAL_LINKED: "document.portalLinked",
+  DOCUMENT_PORTAL_DOWNLOADED: "document.portalDownloaded",
   // Phase 1 — provider support access. Every one of these events is a complete
   // record of a privileged read: granting, revoking, and each USE of a grant.
   // Metadata carries the grant id, the reason and durations only — never the
@@ -69,6 +89,7 @@ export const AUDIT_ACTIONS = {
   PLATFORM_TENANT_NUMBERING_UPDATED: "platform.tenantNumberingUpdated",
   PLATFORM_TENANT_DOMAIN_UPDATED: "platform.tenantDomainUpdated",
   PLATFORM_TENANT_OWNER_ASSIGNED: "platform.tenantOwnerAssigned",
+  PLATFORM_TENANT_LOGO_UPLOADED: "platform.tenantLogoUploaded",
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

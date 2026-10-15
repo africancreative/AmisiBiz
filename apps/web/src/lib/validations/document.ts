@@ -45,7 +45,15 @@ export const documentQuerySchema = z.object({
   page: z.number().int().positive().default(1),
   pageSize: z.number().int().positive().max(100).default(25),
   sortBy: z
-    .enum(["createdAt", "updatedAt", "issuedAt", "number", "total"])
+    .enum([
+      "createdAt",
+      "updatedAt",
+      "issuedAt",
+      /** The date printed on the document, not the moment it was issued. */
+      "issueDate",
+      "number",
+      "total",
+    ])
     .default("issuedAt"),
   sortOrder: z.enum(["asc", "desc"]).default("desc"),
 });

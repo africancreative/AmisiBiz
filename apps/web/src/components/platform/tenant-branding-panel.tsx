@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
 import { DocumentPreview } from "@/components/platform/document-preview";
 import { useProviderActionForm } from "@/components/platform/use-provider-action-form";
 import { updateTenantBrandingForTenantAction } from "@/server/actions/platform";
@@ -24,11 +25,11 @@ import type { DocumentType } from "@prisma/client";
  * produce two different shapes of row — and switching on tenant self-service
  * branding later is a permission change rather than a schema or template change.
  *
- * The logo is displayed but not editable here: logo bytes must travel through the
- * upload route, which verifies the file's magic bytes, its dimensions and the
- * caller's membership before it will store anything or hand back a URL. A text
- * patch that could set `logoUrl` would be able to point a workspace's documents
- * at bytes nobody validated.
+ * The logo is uploaded through the provider route, which verifies the file's
+ * magic bytes and dimensions — the same classification the tenant route uses —
+ * before it stores anything or hands back a URL. The text patch below still
+ * cannot set `logoUrl`, so a colour/name/address save can never point a
+ * workspace's documents at bytes nobody validated.
  */
 
 type Draft = {
@@ -118,6 +119,16 @@ export function TenantBrandingPanel({
     useProviderActionForm();
 
   const [draft, setDraft] = useState<Draft>(() => toDraft(initial));
+  const router = useRouter();
+
+  // The logo is the one branding value a text patch cannot move, so it is
+  // uploaded through the provider route and refreshed into the server-rendered
+  // page rather than held in the draft.
+  const [logoUrl, setLogoUrl] = useState<string | null>(
+    initial?.logoUrl ?? null,
+  );
+  const [logoPending, setLogoPending] = useState(false);
+  const [logoError, setLogoError] = useState<string | null>(null);
 
   // A colour the field has never held a valid value for falls back to the
   // documented default, so a half-typed hex can't blank a saved colour.
@@ -132,6 +143,44 @@ export function TenantBrandingPanel({
       >,
     ) =>
       setDraft((prev) => ({ ...prev, [field]: event.target.value }));
+
+  async function onLogoSelected(
+    event: React.ChangeEvent<HTMLInputElement>,
+  ): Promise<void> {
+    const input = event.target;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    setLogoError(null);
+    setLogoPending(true);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+
+      const response = await fetch(`/api/platform/tenants/${tenantId}/logo`, {
+        method: "POST",
+        body,
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        success?: boolean;
+        data?: { logoUrl?: string };
+        error?: string;
+      } | null;
+
+      if (!response.ok || !payload?.success || !payload.data?.logoUrl) {
+        setLogoError(payload?.error ?? t("logoUploadFailed"));
+        return;
+      }
+
+      setLogoUrl(payload.data.logoUrl);
+      router.refresh();
+    } catch {
+      setLogoError(t("logoUploadFailed"));
+    } finally {
+      setLogoPending(false);
+      input.value = "";
+    }
+  }
 
   const ratio = contrastRatio(
     color("primaryColor"),
@@ -347,22 +396,38 @@ export function TenantBrandingPanel({
           })}
         </div>
 
-        {initial?.logoUrl ? (
-          <div className="space-y-2 border-t border-border pt-4">
-            <p className="label">{t("logo")}</p>
+        <div className="space-y-2 border-t border-border pt-4">
+          <p className="label">{t("logo")}</p>
+          {logoUrl ? (
             <img
-              src={initial.logoUrl}
+              src={logoUrl}
               alt=""
               className="h-10 w-auto max-w-40 object-contain"
               referrerPolicy="no-referrer"
             />
-            <p className="text-xs text-muted-foreground">{t("logoLocked")}</p>
-          </div>
-        ) : (
-          <p className="border-t border-border pt-4 text-xs text-muted-foreground">
-            {t("logoAbsent")}
-          </p>
-        )}
+          ) : (
+            <p className="text-xs text-muted-foreground">{t("logoEmpty")}</p>
+          )}
+          <input
+            aria-label={t("logoUpload")}
+            accept="image/png,image/jpeg,image/webp"
+            className="block text-xs file:mr-3 file:rounded file:border file:border-border file:bg-background file:px-2 file:py-1"
+            disabled={logoPending}
+            onChange={onLogoSelected}
+            type="file"
+          />
+          <p className="text-xs text-muted-foreground">{t("logoHint")}</p>
+          {logoPending ? (
+            <p className="text-xs text-muted-foreground">
+              {t("logoUploading")}
+            </p>
+          ) : null}
+          {logoError ? (
+            <p role="alert" className="field-error">
+              {logoError}
+            </p>
+          ) : null}
+        </div>
 
         {error ? (
           <p
@@ -392,7 +457,7 @@ export function TenantBrandingPanel({
             secondaryColor: color("secondaryColor"),
             accentColor: color("accentColor"),
             primaryForeground: color("primaryForeground"),
-            logoUrl: initial?.logoUrl ?? null,
+            logoUrl: logoUrl ?? null,
           }}
           details={{
             contactEmail: draft.contactEmail,

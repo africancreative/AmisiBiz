@@ -113,7 +113,55 @@
     "trial": {
       "banner": "Uko kwenye jaribio la bure. Siku {days} zimebaki.",
       "upgrade": "Boresha sasa"
-    }
+    },
+    "stats": {
+      "contacts": "Wateja na washirika",
+      "contactsHint": "{active} hai",
+      "items": "Bidhaa na huduma",
+      "itemsHint": "{active} hai",
+      "quotations": "Nukuu",
+      "quotationsHint": "{open} wazi",
+      "invoices": "Ankara",
+      "invoicesHint": "{outstanding} hazijalipwa"
+    },
+    "recentDocuments": "Nyaraka za hivi karibuni",
+    "recentDocumentsDescription": "Nukuu, ankara na hati za uwasilishaji za karibuni za eneo hili la kazi.",
+    "recentDocumentsEmpty": "Hakuna nyaraka bado",
+    "recentDocumentsEmptyDescription": "Nukuu, ankara na hati za uwasilishaji unazounda zitaonekana hapa, mpya kwanza.",
+    "outstandingInvoices": "Ankara ambazo hazijalipwa",
+    "outstandingInvoicesDescription": "Zimetolewa ankara na bado hazijalipwa. Ufuatiliaji wa malipo utakuja na moduli ya nyaraka.",
+    "outstandingInvoicesEmpty": "Hakuna deni",
+    "outstandingInvoicesEmptyDescription": "Hakuna ankara iliyotolewa inayosubiri malipo.",
+    "outstandingTotal": "Jumla isiyolipwa",
+    "outstandingCount": "Ankara {count}",
+    "overdueCount": "{count} zimechelewa",
+    "account": "Akaunti na chapa",
+    "accountDescription": "Hali ya eneo la kazi na utambulisho unaoonekana kwenye nyaraka zako.",
+    "accountFields": {
+      "name": "Biashara",
+      "status": "Hali",
+      "slug": "Kitambulisho cha eneo",
+      "role": "Jukumu lako",
+      "currency": "Sarafu",
+      "timezone": "Saa za eneo",
+      "branding": "Chapa ya nyaraka",
+      "noBranding": "Chapa ya kawaida"
+    },
+    "quickActionsDescription": "Nenda moja kwa moja kwenye moduli za eneo la kazi.",
+    "quick": {
+      "contacts": "Wateja na washirika",
+      "contactsHint": "Simamia watu na kampuni unazofanya nao kazi",
+      "items": "Bidhaa na huduma",
+      "itemsHint": "Bidhaa na huduma unazouza",
+      "documents": "Nyaraka",
+      "documentsHint": "Nukuu, ankara na hati za uwasilishaji",
+      "documentsSoon": "Inakuja na moduli ya nyaraka",
+      "branding": "Chapa",
+      "brandingHint": "Rangi na nembo kwenye nyaraka zako"
+    },
+    "createHint": "Nyaraka mpya zinaundwa kutoka moduli ya nyaraka.",
+    "draft": "Rasimu",
+    "noCustomer": "Hakuna mteja"
   },
   "team": {
     "title": "Timu",
@@ -175,9 +223,13 @@
     },
     "documents": {
       "title": "Nyaraka",
-      "description": "Nukuu, ankara na nyaraka nyingine za biashara.",
+      "description": "Nukuu, ankara na hati za uwasilishaji.",
       "emptyTitle": "Hakuna nyaraka bado",
-      "emptyDescription": "Nyaraka unazounda zitaonekana hapa. Moduli ya nyaraka inakuja katika awamu ijayo."
+      "emptyDescription": "Nukuu, ankara na hati za uwasilishaji utakazounda zitaonekana hapa.",
+      "newDocument": {
+        "title": "Nyaraka mpya",
+        "description": "Rasimu haina namba na si sehemu ya kumbukumbu zako hadi uiweke rasmi."
+      }
     }
   },
   "documentEnums": {
@@ -461,8 +513,11 @@
       "defaultFooter": "Sehemu ya chini ya nyaraka",
       "paymentInstructions": "Maelekezo ya malipo",
       "logo": "Nembo",
-      "logoAbsent": "Hakuna nembo iliyohifadhiwa kwa nafasi hii ya kazi. Upakiaji wa nembo hufanywa katika skrini ya branding ya biashara yenyewe.",
-      "logoLocked": "Nembo hupitia njia ya upakiaji inayothibitisha faili kabla ya kuhifadhi. Konsoli hii inaweza kuonyesha nembo lakini si kubadilisha.",
+      "logoEmpty": "Hakuna nembo iliyohifadhiwa kwa nafasi hii ya kazi bado.",
+      "logoHint": "PNG, JPEG au WebP, hadi MB 5 na pikseli 2000x2000. Kupakia hubadilisha nembo ya sasa.",
+      "logoUpload": "Pakia nembo",
+      "logoUploading": "Inapakia nembo…",
+      "logoUploadFailed": "Nembo haikuweza kupakiwa. Angalia faili na ujaribu tena.",
       "colorPicker": "Chagua rangi ya {label}",
       "previewTitle": "Onyesho la awali la nyaraka",
       "save": "Hifadhi branding",

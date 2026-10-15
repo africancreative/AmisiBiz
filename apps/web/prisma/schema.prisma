@@ -406,11 +406,21 @@ model Contact {
   updatedAt   DateTime      @updatedAt
   archivedAt  DateTime?
 
+  // ── Customer-portal linkage ──────────────────────────────────────────────
+  // A portal user is an ordinary `User` whose `TenantMember.role` is
+  // CUSTOMER_PORTAL_USER. Linking that user here is the WHOLE of their access:
+  // the portal download route resolves this row and then refuses any document
+  // whose `contactId` is not this contact, so a portal user can only ever see
+  // their own documents. Revoking portal access is setting this back to NULL.
+  portalUserId String? @db.Uuid
+  portalUser   User?   @relation("ContactPortalAccess", fields: [portalUserId], references: [id], onDelete: SetNull)
+
   tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   addresses    ContactAddress[]
   contactItems ContactItem[]
   documents    Document[] // Future: document history
 
+  @@unique([tenantId, portalUserId])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, email])
@@ -836,6 +846,8 @@ model User {
   documentsVoided       Document[]            @relation("DocumentVoidedBy")
   paymentsReversed      DocumentPayment[]     @relation("DocumentPaymentReversedBy")
   documentStatusEvents  DocumentStatusEvent[] @relation("DocumentStatusEventActor")
+  // Contacts this user may read through the customer portal (usually at most one).
+  portalContacts        Contact[]             @relation("ContactPortalAccess")
 
   @@index([email])
   @@index([platformRole])

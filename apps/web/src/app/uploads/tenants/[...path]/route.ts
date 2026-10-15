@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile, stat } from "fs/promises";
 import { join, resolve, sep } from "path";
 import { getSessionUser } from "@/lib/auth/session-user";
-import { resolveTenantContext } from "@/server/auth/authorization";
+import { resolveTenantContext, authorizePlatformTenant } from "@/server/auth/authorization";
+import { PERMISSIONS } from "@amisibiz/auth";
 import { z } from "zod";
 /**
  * Private serving route for tenant uploads (currently logos).
  *
  * Three controls, all required:
- *  1. The caller must be authenticated and an active member of the tenant whose
- *     folder is being read — `UPLOADS_ROOT/**` is not public.
+ *  1. The caller must be authenticated and either an active member of the tenant
+ *     whose folder is being read, or a platform administrator (who needs to show
+ *     and configure the logo without being a member of the workspace) —
+ *     `UPLOADS_ROOT/**` is not public.
  *  2. The path must match the exact expected shape
  *     `tenants/<cuid>/logo/<32-hex>.<ext>`; nothing is joined from user text, so
  *     traversal (`..`, encoded separators, absolute paths) cannot be expressed.
@@ -22,7 +25,9 @@ import { z } from "zod";
  * still served their own uploads — suspension pauses writes and synchronization,
  * not reading and downloading, and an issued invoice carrying that logo has to
  * stay printable — while a PENDING tenant is refused outright, because a
- * workspace that never opened has nothing of its own to serve.
+ * workspace that never opened has nothing of its own to serve. A platform
+ * administrator who is not a member falls back to `authorizePlatformTenant` with
+ * `platform.tenants.read`.
  *
  * Responses are private, non-stored, nosniff and sandboxed.
  */
@@ -98,10 +103,20 @@ export async function GET(
     }
 
     // Membership (and tenant operational status) is checked on every read.
+    // Platform administrators may also read a tenant's uploads to support the
+    // console and previews without needing to be a member.
     try {
       await resolveTenantContext(user.id, parsedTenant.data);
     } catch {
-      return jsonError("Not found", 404);
+      try {
+        await authorizePlatformTenant(
+          user.id,
+          parsedTenant.data,
+          PERMISSIONS.PLATFORM_TENANTS_READ,
+        );
+      } catch {
+        return jsonError("Not found", 404);
+      }
     }
 
     const absolute = resolve(UPLOADS_ROOT, root, parsedTenant.data, folder, fileName);
