@@ -30,7 +30,10 @@
  * With no arguments it scans apps/web/.next/static (the client bundle) and, when
  * present, apps/web/.next/server — the server tree is included because a secret
  * that reaches it must not be reachable from a client chunk either, and inlining
- * can move code between the two.
+ * can move code between the two. The installed apps' bundle directories
+ * (apps/mobile/web, apps/desktop/web) are scanned too: an APK and a Windows
+ * installer are client bundles that sit on a customer's device, which is where
+ * proof 8 matters most.
  *
  * Exit 0 = clean, 1 = findings, 2 = could not run (missing build output).
  */
@@ -115,6 +118,13 @@ function defaultTargets() {
   const candidates = [
     join(ROOT, "apps", "web", ".next", "static"),
     join(ROOT, "apps", "web", ".next", "server"),
+    // Phase 06: the installed apps are client bundles too. `apps/mobile/web` is
+    // what ships inside the Android APK and `apps/desktop/web` inside the Windows
+    // installer, and the directive states the rule for them as plainly as for the
+    // browser — no privileged Supabase key in an installed app. Scanning them here
+    // means the check covers the path a signing step would otherwise skip.
+    join(ROOT, "apps", "mobile", "web"),
+    join(ROOT, "apps", "desktop", "web"),
   ];
   return candidates.filter((c) => existsSync(c));
 }

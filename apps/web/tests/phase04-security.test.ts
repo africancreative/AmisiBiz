@@ -1398,6 +1398,29 @@ describe("Phase 04 customer-specific catalogue", () => {
     expect(prismaMock.item.updateMany).not.toHaveBeenCalled();
   });
 
+  it("rejects a one-sided edit that inverts the stored validity window", async () => {
+    asRole("TENANT_OWNER");
+    prismaMock.contactItem.findFirst.mockImplementation(
+      scopedById([
+        { ...ownContactItem, validUntil: new Date("2026-06-30T00:00:00.000Z") },
+      ]),
+    );
+
+    // Only the lower bound moves, and it lands after the stored upper bound —
+    // the schema cannot see this because the payload carries just one side.
+    const result = loose(
+      await updateContactItemAction({
+        tenantId: TENANT_ID,
+        contactItemId: CONTACT_ITEM_ID,
+        validFrom: "2026-12-01",
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("VALIDATION_ERROR");
+    expect(prismaMock.contactItem.updateMany).not.toHaveBeenCalled();
+  });
+
   it("refuses to update an assignment for a tenant the actor does not belong to", async () => {
     asRole("TENANT_OWNER");
     prismaMock.contactItem.findFirst.mockImplementation(

@@ -1,0 +1,25 @@
+{
+  "name": "@amisibiz/offline",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Offline client storage — versioned SQLite migrations, a driver adapter (node:sqlite / Capacitor / Tauri) and local repositories for the installed Android and Windows clients",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@amisibiz/documents": "workspace:*",
+    "@amisibiz/sync": "workspace:*"
+  },
+  "devDependencies": {
+    "@amisibiz/config": "workspace:*",
+    "@capacitor-community/sqlite": "^8.1.1",
+    "@capacitor/core": "^8.5.3",
+    "@tauri-apps/plugin-sql": "^2.6.0",
+    "eslint": "^9.26.0",
+    "typescript": "^5.8.3"
+  }
+}

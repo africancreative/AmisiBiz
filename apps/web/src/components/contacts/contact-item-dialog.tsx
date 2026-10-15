@@ -49,6 +49,14 @@ interface ContactItemDialogProps {
   onSuccess: () => void;
 }
 
+/** A stored `Date` (or nothing) as the `YYYY-MM-DD` a date input expects. */
+function toDateInput(value: Date | string | null | undefined): string {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
 export function ContactItemDialog({
   tenantId,
   contactId,
@@ -128,10 +136,13 @@ export function ContactItemDialog({
       setValue("itemId", ci.itemId);
       setValue("customCode", ci.customCode ?? "");
       setValue("customName", ci.customName ?? "");
+      setValue("customUnitOfMeasure", ci.customUnitOfMeasure ?? "");
       // Exact decimal text from `numeric`, no float round-trip.
       setValue("agreedPrice", ci.agreedPrice.toString());
       setValue("discountPercent", ci.discountPercent.toString());
       setValue("isAvailable", ci.isAvailable);
+      setValue("validFrom", toDateInput(ci.validFrom));
+      setValue("validUntil", toDateInput(ci.validUntil));
       // The picker excludes already-assigned items, so seed this one in —
       // otherwise the default-price comparison would have nothing to show.
       setAvailableItems((prev) =>
@@ -157,9 +168,12 @@ export function ContactItemDialog({
             tenantId,
             customCode: data.customCode,
             customName: data.customName,
+            customUnitOfMeasure: data.customUnitOfMeasure,
             agreedPrice: data.agreedPrice,
             discountPercent: data.discountPercent,
             isAvailable: data.isAvailable,
+            validFrom: data.validFrom || null,
+            validUntil: data.validUntil || null,
           })
         : await createContactItemAction({
             tenantId,
@@ -167,9 +181,12 @@ export function ContactItemDialog({
             itemId: data.itemId,
             customCode: data.customCode,
             customName: data.customName,
+            customUnitOfMeasure: data.customUnitOfMeasure,
             agreedPrice: data.agreedPrice,
             discountPercent: data.discountPercent,
             isAvailable: data.isAvailable,
+            validFrom: data.validFrom || null,
+            validUntil: data.validUntil || null,
           });
 
       if (result.success) {
@@ -273,6 +290,41 @@ export function ContactItemDialog({
               {errors.customName && (
                 <p className="text-xs text-destructive">
                   {errors.customName.message}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="customUnitOfMeasure">Customer Unit</Label>
+              <Input
+                id="customUnitOfMeasure"
+                {...register("customUnitOfMeasure")}
+                maxLength={20}
+                placeholder="e.g. carton"
+              />
+              {errors.customUnitOfMeasure && (
+                <p className="text-xs text-destructive">
+                  {errors.customUnitOfMeasure.message}
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="validFrom">Valid From</Label>
+              <Input id="validFrom" type="date" {...register("validFrom")} />
+              {errors.validFrom && (
+                <p className="text-xs text-destructive">
+                  {errors.validFrom.message}
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="validUntil">Valid Until</Label>
+              <Input id="validUntil" type="date" {...register("validUntil")} />
+              {errors.validUntil && (
+                <p className="text-xs text-destructive">
+                  {errors.validUntil.message}
                 </p>
               )}
             </div>

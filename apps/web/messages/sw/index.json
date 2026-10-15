@@ -198,6 +198,7 @@
       "items": "Bidhaa",
       "documents": "Nyaraka",
       "branding": "Chapa",
+      "audit": "Rekodi ya ukaguzi",
       "team": "Timu",
       "dashboard": "Dashibodi"
     },
@@ -206,6 +207,39 @@
     "noAccessTitle": "Ufikiaji haupatikani",
     "noAccessDescription": "Huna ufikiaji wa nafasi hii ya kazi tena, au imefungwa kwako. Ikiwa hii si tarajiwa, wasiliana na msimamizi wa biashara yako au muhudumu.",
     "readonlyBanner": "Shirika hili limesimamishwa. Unaweza kusoma, kuchapisha na kupakua vilivyopo; maandishi mapya na usawazishaji vinakataliwa muhudumu anaposondoa kusimamishwa."
+  },
+  "audit": {
+    "title": "Rekodi ya ukaguzi",
+    "description": "Rekodi ya shughuli zenye ufikiaji maalum katika nafasi hii ya kazi. Maingizo huandikwa na seva na hayawezi kuhaririwa wala kufutwa.",
+    "platformTitle": "Rekodi ya ukaguzi ya jukwaa",
+    "platformDescription": "Shughuli zenye ufikiaji maalum katika nafasi zote za kazi. Kusoma kati ya nafasi nyingi kunahitaji ruhusa ya ukaguzi ya jukwaa.",
+    "filters": {
+      "action": "Kitendo",
+      "actionPlaceholder": "mf. document.issued",
+      "resource": "Rasilimali",
+      "resourcePlaceholder": "mf. Document",
+      "tenant": "Nafasi ya kazi",
+      "allTenants": "Nafasi zote za kazi",
+      "from": "Kuanzia",
+      "to": "Hadi",
+      "apply": "Tumia",
+      "reset": "Weka upya"
+    },
+    "columns": {
+      "when": "Lini",
+      "action": "Kitendo",
+      "actor": "Mhusika",
+      "tenant": "Nafasi ya kazi",
+      "resource": "Rasilimali"
+    },
+    "empty": {
+      "title": "Hakuna matukio ya ukaguzi",
+      "description": "Hakuna maingizo yanayolingana na vichujio hivi. Kuviweka upya kunaonyesha shughuli za hivi karibuni."
+    },
+    "system": "Mfumo",
+    "platform": "Jukwaa",
+    "loadFailed": "Rekodi ya ukaguzi haikuweza kupakiwa. Tafadhali jaribu tena.",
+    "showing": "Inaonyesha {from}–{to} kati ya {total}"
   },
   "modules": {
     "newButton": "Mpya",

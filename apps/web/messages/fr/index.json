@@ -198,6 +198,7 @@
       "items": "Articles",
       "documents": "Documents",
       "branding": "Image de marque",
+      "audit": "Journal d'audit",
       "team": "Équipe",
       "dashboard": "Tableau de bord"
     },
@@ -206,6 +207,39 @@
     "noAccessTitle": "Accès indisponible",
     "noAccessDescription": "Vous n'avez plus accès à cet espace de travail, ou il vous est fermé. Si cela est inattendu, contactez votre administrateur ou le prestataire.",
     "readonlyBanner": "Cette organisation est suspendue. Vous pouvez lire, imprimer et télécharger ce qu'elle possède déjà ; les nouvelles écritures et la synchronisation sont refusées tant que le prestataire ne lève pas la suspension."
+  },
+  "audit": {
+    "title": "Journal d'audit",
+    "description": "Un relevé de l'activité privilégiée de cet espace de travail. Les entrées sont écrites par le serveur et ne peuvent être ni modifiées ni supprimées.",
+    "platformTitle": "Journal d'audit de la plateforme",
+    "platformDescription": "Activité privilégiée sur tous les espaces de travail. Les lectures entre espaces nécessitent la permission d'audit de la plateforme.",
+    "filters": {
+      "action": "Action",
+      "actionPlaceholder": "ex. document.issued",
+      "resource": "Ressource",
+      "resourcePlaceholder": "ex. Document",
+      "tenant": "Espace de travail",
+      "allTenants": "Tous les espaces",
+      "from": "Du",
+      "to": "Au",
+      "apply": "Appliquer",
+      "reset": "Réinitialiser"
+    },
+    "columns": {
+      "when": "Quand",
+      "action": "Action",
+      "actor": "Acteur",
+      "tenant": "Espace de travail",
+      "resource": "Ressource"
+    },
+    "empty": {
+      "title": "Aucun événement d'audit",
+      "description": "Aucune entrée ne correspond à ces filtres. Les réinitialiser affiche l'activité la plus récente."
+    },
+    "system": "Système",
+    "platform": "Plateforme",
+    "loadFailed": "Le journal d'audit n'a pas pu être chargé. Veuillez réessayer.",
+    "showing": "Affichage de {from} à {to} sur {total}"
   },
   "modules": {
     "newButton": "Nouveau",

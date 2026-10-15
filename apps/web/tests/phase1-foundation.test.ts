@@ -154,6 +154,10 @@ describe("@amisibiz/sync (contracts)", () => {
     const operation: QueuedOperation = {
       id: "3d1b2c33-3d2f-4f13-9a2e-3c1a2b3d4e5f",
       type: "contact.create",
+      // The row this operation writes, named rather than guessed from the type:
+      // `entity` + `entityId` is what the server routes and upserts by.
+      entity: "contact",
+      entityId: "9f8e7d6c-5b4a-4321-8765-43210fedcba9",
       payload: { name: "Example" },
       createdAt: new Date().toISOString(),
       attempts: 0,

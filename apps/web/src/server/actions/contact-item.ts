@@ -8,6 +8,8 @@ import { PERMISSIONS } from "@amisibiz/auth";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
 import { fail, type ActionResult } from "@/lib/errors";
 import { authorizationFailure, invalidInput } from "@/server/actions/_shared";
+import type { CreateActionOptions } from "@/server/actions/_shared";
+import { recordSyncDeletion } from "@/server/sync/tombstones";
 import {
   createContactItemSchema,
   updateContactItemSchema,
@@ -26,16 +28,19 @@ type ContactItemWithItem = Prisma.ContactItemGetPayload<{
 }>;
 
 /**
- * Explicit mapping again: only the five customer-specific fields can be written,
- * and `contactId`/`itemId`/`tenantId` are structurally unreachable from an update
+ * Explicit mapping again: only the customer-specific fields can be written, and
+ * `contactId`/`itemId`/`tenantId` are structurally unreachable from an update
  * payload.
  */
 function toContactItemUpdateData(data: {
   customCode?: string | null | undefined;
   customName?: string | null | undefined;
+  customUnitOfMeasure?: string | null | undefined;
   agreedPrice?: string | undefined;
   discountPercent?: string | undefined;
   isAvailable?: boolean | undefined;
+  validFrom?: Date | null | undefined;
+  validUntil?: Date | null | undefined;
 }): Prisma.ContactItemUpdateInput {
   const text = (value: string | null | undefined): string | null =>
     value?.trim() ? value.trim() : null;
@@ -43,6 +48,9 @@ function toContactItemUpdateData(data: {
   const update: Prisma.ContactItemUpdateInput = {};
   if (data.customCode !== undefined) update.customCode = text(data.customCode);
   if (data.customName !== undefined) update.customName = text(data.customName);
+  if (data.customUnitOfMeasure !== undefined) {
+    update.customUnitOfMeasure = text(data.customUnitOfMeasure);
+  }
   if (data.agreedPrice !== undefined) {
     update.agreedPrice = new Prisma.Decimal(data.agreedPrice);
   }
@@ -50,11 +58,26 @@ function toContactItemUpdateData(data: {
     update.discountPercent = new Prisma.Decimal(data.discountPercent);
   }
   if (data.isAvailable !== undefined) update.isAvailable = data.isAvailable;
+  if (data.validFrom !== undefined) update.validFrom = data.validFrom;
+  if (data.validUntil !== undefined) update.validUntil = data.validUntil;
   return update;
+}
+
+const WINDOW_MESSAGE =
+  "The valid-until date must not be before the valid-from date.";
+
+/** The store also enforces this; here it produces a field error, not a 500. */
+function windowIsInOrder(
+  validFrom: Date | null | undefined,
+  validUntil: Date | null | undefined,
+): boolean {
+  if (!validFrom || !validUntil) return true;
+  return validFrom <= validUntil;
 }
 
 export async function createContactItemAction(
   rawInput: unknown,
+  options?: CreateActionOptions,
 ): Promise<ActionResult<{ contactItemId: string }>> {
   const session = await requireAuth();
 
@@ -131,14 +154,20 @@ export async function createContactItemAction(
   try {
     const contactItem = await prisma.contactItem.create({
       data: {
+        // Client-supplied id from the offline sync service (`options.rowId`).
+        // Never from the payload.
+        ...(options?.rowId !== undefined ? { id: options.rowId } : {}),
         tenantId: context.tenantId,
         contactId: contact.id,
         itemId: item.id,
         customCode: data.customCode?.trim() || null,
         customName: data.customName?.trim() || null,
+        customUnitOfMeasure: data.customUnitOfMeasure?.trim() || null,
         agreedPrice: new Prisma.Decimal(data.agreedPrice),
         discountPercent: new Prisma.Decimal(data.discountPercent),
         isAvailable: data.isAvailable,
+        validFrom: data.validFrom ?? null,
+        validUntil: data.validUntil ?? null,
       },
       select: { id: true },
     });
@@ -185,11 +214,24 @@ export async function updateContactItemAction(
 
   const existing = await prisma.contactItem.findFirst({
     where: { id: contactItemId, tenantId: context.tenantId },
-    select: { id: true },
+    select: { id: true, validFrom: true, validUntil: true },
   });
 
   if (!existing) {
     return fail("Contact item not found.", { code: "NOT_FOUND" });
+  }
+
+  // A one-sided edit has to be judged against the stored window, which the
+  // schema alone cannot see.
+  const nextFrom =
+    data.validFrom !== undefined ? data.validFrom : existing.validFrom;
+  const nextUntil =
+    data.validUntil !== undefined ? data.validUntil : existing.validUntil;
+  if (!windowIsInOrder(nextFrom, nextUntil)) {
+    return fail(WINDOW_MESSAGE, {
+      code: "VALIDATION_ERROR",
+      fieldErrors: { validUntil: [WINDOW_MESSAGE] },
+    });
   }
 
   const updateData = toContactItemUpdateData(data);
@@ -245,7 +287,7 @@ export async function deleteContactItemAction(
 
   const existing = await prisma.contactItem.findFirst({
     where: { id: contactItemId, tenantId: context.tenantId },
-    select: { id: true, itemId: true, contactId: true },
+    select: { id: true, itemId: true, contactId: true, revision: true },
   });
 
   if (!existing) {
@@ -255,7 +297,21 @@ export async function deleteContactItemAction(
   try {
     // Removing an agreement is allowed: the assignment is not a financial
     // record. The default catalogue item and the contact itself are untouched.
-    await prisma.contactItem.delete({ where: { id: existing.id } });
+    //
+    // The tombstone is written in the SAME transaction as the delete: a device
+    // that already holds this agreement must be told it is gone on its next pull,
+    // and a delete that committed without its tombstone would leave that copy as
+    // an unexplainable ghost.
+    await prisma.$transaction(async (tx) => {
+      await tx.contactItem.delete({ where: { id: existing.id } });
+      await recordSyncDeletion(tx, {
+        tenantId: context.tenantId,
+        entity: "customer_price",
+        entityId: existing.id,
+        revision: existing.revision,
+        deletedById: session.user.id,
+      });
+    });
 
     await recordAudit({
       action: AUDIT_ACTIONS.CONTACT_ITEM_REMOVED,

@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@amisibiz/ui/card";
+import { reportError } from "@/lib/error-tracking";
 
 /**
  * Route-level error boundary for everything under a locale.
@@ -28,7 +29,10 @@ export default function LocaleError({
   const t = useTranslations("common");
 
   useEffect(() => {
-    console.error("[app] Route error", error.name, error.digest ?? "");
+    // One reporting path for every boundary: structured, redacted, and carrying
+    // only the digest in production. `reportError` never throws and never
+    // surfaces the raw error, so the boundary stays the last line of defence.
+    reportError(error, { scope: "route:locale" });
   }, [error]);
 
   return (

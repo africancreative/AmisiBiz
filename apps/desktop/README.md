@@ -51,6 +51,31 @@ run in this environment, and no build success is claimed.
   `@tauri-apps/plugin-sql` plus the operation queue from `@amisibiz/sync`; new
   capabilities are added least-privilege and reviewed.
 
+## Phase 6 status — **blocked, not built** (2026-10-15)
+
+No Windows installer exists and none is claimed. Two independent blockers, both
+verified rather than assumed:
+
+1. **Toolchain absent on this machine:** no `cargo`/`rustc`/`rustup` and no MSVC C++
+   workload (only Windows Kits 10), so `pnpm --filter @amisibiz/desktop tauri build`
+   cannot compile even the existing configured shell.
+2. **`@tauri-apps/plugin-sql` 2.6.0 cannot run this storage layer as designed**
+   (checked against the installed package, not its docs): it exposes `execute`,
+   `select`, `load` and `close` and **no transaction API**, while every multi-row local
+   write (document + lines + snapshot + outbox entry in one transaction) must be atomic;
+   and it binds `$1, $2, …` where the shared SQL layer emits `?`. `tauriSqlDriver`
+   therefore **refuses `transaction()` at runtime** with a message naming the reason,
+   instead of degrading it into a statement sequence that can half-write a document — a
+   silently non-atomic driver is a data-loss bug wearing a compatibility badge.
+
+What Phase 6 did land is platform-independent: the schema, migration runner,
+repositories, outbox and sync engine are implemented once in `@amisibiz/offline` and
+executed against real SQLite through the `node:sqlite` driver
+(`apps/web/tests/phase06-*.test.ts`). Unblocking Windows means installing the Rust +
+MSVC toolchain **and** either a Tauri SQL plugin with transactions or a documented
+restructure of the write paths. See
+`docs/architecture/offline-client-design.md` §3 and §12.
+
 ## Security
 
 The shell only ever holds the user's own session. The Supabase secret key

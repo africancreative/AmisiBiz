@@ -25,6 +25,8 @@
     "@amisibiz/database": "workspace:*",
     "@amisibiz/domain": "workspace:*",
     "@amisibiz/documents": "workspace:*",
+    "@amisibiz/integrations": "workspace:*",
+    "@amisibiz/offline": "workspace:*",
     "@amisibiz/sync": "workspace:*",
     "@amisibiz/ui": "workspace:*",
     "@hookform/resolvers": "^5.9.1",

@@ -57,3 +57,16 @@ export function invalidInput(
     ...(fieldErrors ? { fieldErrors } : {}),
   };
 }
+
+/**
+ * Options for a create Server Action that come from a **trusted server caller**,
+ * never from the browser-supplied payload.
+ *
+ * `rowId` exists for the offline sync service: a device mints a row's id before
+ * it has a connection, and the server must keep that id so the local and remote
+ * rows are recognisably the same row. It is a separate argument on purpose — a
+ * create's *payload* still has any stray `id` stripped
+ * (`phase04-security.test.ts`'s mass-assignment case), so row identity is never a
+ * field a form can set.
+ */
+export type CreateActionOptions = { readonly rowId?: string };

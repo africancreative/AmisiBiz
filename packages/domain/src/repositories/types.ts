@@ -113,9 +113,12 @@ export interface ContactItemRecord {
   itemId: string;
   customCode: string | null;
   customName: string | null;
+  customUnitOfMeasure: string | null;
   agreedPrice: string;
   discountPercent: string;
   isAvailable: boolean;
+  validFrom: string | null;
+  validUntil: string | null;
   createdAt: string;
   updatedAt: string;
 }

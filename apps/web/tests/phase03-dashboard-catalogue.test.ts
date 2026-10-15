@@ -49,6 +49,10 @@ import {
   type ItemRepository,
   type Page,
 } from "@amisibiz/domain";
+import {
+  contactItemFormSchema,
+  createContactItemSchema,
+} from "@/lib/validations/contact-item";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -479,6 +483,249 @@ describe("document line snapshot", () => {
     // 3 × 19.9999 = 59.9997 exactly — a float would round differently.
     expect(line.lineTotal).toBe("59.9997");
   });
+
+  it("copies a customer-specific unit when the agreement provides one", () => {
+    const line = buildDocumentLineSnapshot({
+      item: catalogueItem,
+      quantity: "1",
+      override: {
+        customCode: null,
+        customName: null,
+        customUnitOfMeasure: "carton",
+        agreedPrice: "900.00",
+        discountPercent: "0",
+        isAvailable: true,
+      },
+    });
+
+    expect(line.priceSource).toBe("customer");
+    expect(line.unitOfMeasure).toBe("carton");
+  });
+
+  it("keeps the catalogue unit when the customer agreement has none", () => {
+    const line = buildDocumentLineSnapshot({
+      item: catalogueItem,
+      quantity: "1",
+      override: {
+        customCode: null,
+        customName: null,
+        agreedPrice: "900.00",
+        discountPercent: "0",
+        isAvailable: true,
+      },
+    });
+
+    expect(line.unitOfMeasure).toBe("each");
+  });
+
+  it("applies an agreement inside its validity window (bounds inclusive)", () => {
+    const override = {
+      customCode: null,
+      customName: null,
+      agreedPrice: "900.00",
+      discountPercent: "0",
+      isAvailable: true,
+      validFrom: "2026-01-01",
+      validUntil: "2026-12-31",
+    };
+
+    for (const asOf of ["2026-06-15", "2026-01-01", "2026-12-31"]) {
+      const line = buildDocumentLineSnapshot({
+        item: catalogueItem,
+        quantity: "1",
+        override,
+        asOf,
+      });
+      expect(line.priceSource).toBe("customer");
+      expect(line.unitPrice).toBe("900.0000");
+    }
+  });
+
+  it("falls back to the catalogue before and after the validity window", () => {
+    const override = {
+      customCode: null,
+      customName: null,
+      agreedPrice: "900.00",
+      discountPercent: "0",
+      isAvailable: true,
+      validFrom: "2026-01-01",
+      validUntil: "2026-12-31",
+    };
+
+    const before = buildDocumentLineSnapshot({
+      item: catalogueItem,
+      quantity: "1",
+      override,
+      asOf: "2025-12-31",
+    });
+    const after = buildDocumentLineSnapshot({
+      item: catalogueItem,
+      quantity: "1",
+      override,
+      asOf: "2027-01-01",
+    });
+
+    expect(before.priceSource).toBe("catalogue");
+    expect(before.unitPrice).toBe("1000.0000");
+    expect(after.priceSource).toBe("catalogue");
+    expect(after.unitPrice).toBe("1000.0000");
+  });
+
+  it("never applies a bounded agreement when no date is given to verify it", () => {
+    const line = buildDocumentLineSnapshot({
+      item: catalogueItem,
+      quantity: "1",
+      override: {
+        customCode: null,
+        customName: null,
+        agreedPrice: "900.00",
+        discountPercent: "0",
+        isAvailable: true,
+        validUntil: "2026-12-31",
+      },
+    });
+
+    expect(line.priceSource).toBe("catalogue");
+    expect(line.unitPrice).toBe("1000.0000");
+  });
+
+  it("applies an open-ended agreement regardless of date", () => {
+    const override = {
+      customCode: null,
+      customName: null,
+      agreedPrice: "900.00",
+      discountPercent: "0",
+      isAvailable: true,
+      validFrom: null,
+      validUntil: null,
+    };
+
+    expect(
+      buildDocumentLineSnapshot({
+        item: catalogueItem,
+        quantity: "1",
+        override,
+      }).priceSource,
+    ).toBe("customer");
+    expect(
+      buildDocumentLineSnapshot({
+        item: catalogueItem,
+        quantity: "1",
+        override,
+        asOf: "2099-01-01",
+      }).priceSource,
+    ).toBe("customer");
+  });
+});
+
+// ─── Customer catalogue terms: unit and validity window ───────────────────────
+
+describe("customer catalogue assignment terms", () => {
+  const valid = {
+    tenantId: TENANT_ID,
+    contactId: "77777777-7777-4777-8777-777777770001",
+    itemId: "55555555-5555-4555-8555-555555550001",
+    agreedPrice: "90.00",
+  };
+
+  it("accepts a custom unit and a well-formed validity window", () => {
+    const parsed = createContactItemSchema.safeParse({
+      ...valid,
+      customUnitOfMeasure: "carton",
+      validFrom: "2026-01-01",
+      validUntil: "2026-12-31",
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.customUnitOfMeasure).toBe("carton");
+    expect(parsed.data.validFrom).toBeInstanceOf(Date);
+    expect(parsed.data.validUntil).toBeInstanceOf(Date);
+  });
+
+  it("accepts an open-ended window (either bound absent)", () => {
+    const parsed = createContactItemSchema.safeParse({
+      ...valid,
+      validFrom: "2026-01-01",
+    });
+
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.validFrom).toBeInstanceOf(Date);
+    expect(parsed.data.validUntil).toBeNull();
+  });
+
+  it("rejects a validity window that runs backwards", () => {
+    const parsed = createContactItemSchema.safeParse({
+      ...valid,
+      validFrom: "2026-12-31",
+      validUntil: "2026-01-01",
+    });
+
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    expect(parsed.error.issues[0]?.path).toEqual(["validUntil"]);
+  });
+
+  it("rejects an over-long customer unit", () => {
+    const parsed = createContactItemSchema.safeParse({
+      ...valid,
+      customUnitOfMeasure: "x".repeat(21),
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it("mirrors the window rule in the form schema", () => {
+    const inverted = contactItemFormSchema.safeParse({
+      itemId: "",
+      customCode: "",
+      customName: "",
+      customUnitOfMeasure: "",
+      agreedPrice: "1.00",
+      discountPercent: "0",
+      isAvailable: true,
+      validFrom: "2026-12-31",
+      validUntil: "2026-01-01",
+    });
+    expect(inverted.success).toBe(false);
+
+    const validWindow = contactItemFormSchema.safeParse({
+      itemId: "",
+      customCode: "",
+      customName: "",
+      customUnitOfMeasure: "carton",
+      agreedPrice: "1.00",
+      discountPercent: "0",
+      isAvailable: true,
+      validFrom: "2026-01-01",
+      validUntil: "2026-12-31",
+    });
+    expect(validWindow.success).toBe(true);
+  });
+
+  it("carries the new terms through the repository port", async () => {
+    const contacts = new InMemoryContactRepository([
+      makeContact("c1", TENANT_ID),
+    ]);
+    const items = new InMemoryItemRepository([makeItem("i1", TENANT_ID)]);
+    const link = new InMemoryContactItemRepository(contacts, items);
+
+    const record = await link.upsert(TENANT_ID, {
+      contactId: "c1",
+      itemId: "i1",
+      customUnitOfMeasure: "carton",
+      agreedPrice: "90.00",
+      discountPercent: "0",
+      validFrom: "2026-01-01T00:00:00.000Z",
+      validUntil: "2026-12-31T00:00:00.000Z",
+    });
+
+    expect(record.customUnitOfMeasure).toBe("carton");
+    expect(record.validFrom).toBe("2026-01-01T00:00:00.000Z");
+    expect(record.validUntil).toBe("2026-12-31T00:00:00.000Z");
+    expect(record.isAvailable).toBe(true);
+  });
 });
 
 // ─── Exact decimal arithmetic ─────────────────────────────────────────────────
@@ -776,9 +1023,12 @@ class InMemoryContactItemRepository implements ContactItemRepository {
       itemId: input.itemId,
       customCode: input.customCode ?? null,
       customName: input.customName ?? null,
+      customUnitOfMeasure: input.customUnitOfMeasure ?? null,
       agreedPrice: input.agreedPrice,
       discountPercent: input.discountPercent,
       isAvailable: input.isAvailable ?? true,
+      validFrom: input.validFrom ?? null,
+      validUntil: input.validUntil ?? null,
       createdAt: existing?.createdAt ?? "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     };

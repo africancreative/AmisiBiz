@@ -43,9 +43,12 @@ export interface ContactItemRepository {
       itemId: string;
       customCode?: string | null;
       customName?: string | null;
+      customUnitOfMeasure?: string | null;
       agreedPrice: string;
       discountPercent: string;
       isAvailable?: boolean;
+      validFrom?: string | null;
+      validUntil?: string | null;
     },
   ): Promise<ContactItemRecord>;
 

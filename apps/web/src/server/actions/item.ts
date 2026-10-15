@@ -8,6 +8,7 @@ import { PERMISSIONS } from "@amisibiz/auth";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
 import { fail, type ActionResult } from "@/lib/errors";
 import { authorizationFailure, invalidInput } from "@/server/actions/_shared";
+import type { CreateActionOptions } from "@/server/actions/_shared";
 import {
   createTaxCategorySchema,
   updateTaxCategorySchema,
@@ -372,6 +373,7 @@ export async function getTaxCategoryAction(
 
 export async function createItemAction(
   rawInput: unknown,
+  options?: CreateActionOptions,
 ): Promise<ActionResult<{ itemId: string }>> {
   const session = await requireAuth();
 
@@ -430,6 +432,9 @@ export async function createItemAction(
   try {
     const item = await prisma.item.create({
       data: {
+        // Client-supplied id from the offline sync service (`options.rowId`), so
+        // the server keeps the id the device minted. Never from the payload.
+        ...(options?.rowId !== undefined ? { id: options.rowId } : {}),
         tenantId: context.tenantId,
         type: data.type,
         status: data.status,

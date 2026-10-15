@@ -40,12 +40,18 @@ export interface CatalogueItemSource {
 export interface CustomerCatalogueOverride {
   customCode: string | null;
   customName: string | null;
+  /** Customer-specific unit of measure; falls back to the catalogue unit. */
+  customUnitOfMeasure?: string | null;
   /** Agreed price for this customer, decimal string. */
   agreedPrice: string;
   /** Discount percentage 0–100, decimal string (e.g. "10.00"). */
   discountPercent: string;
   /** When false the override is not applied. */
   isAvailable: boolean;
+  /** ISO date the agreement starts (inclusive); absent/null means "open". */
+  validFrom?: string | null;
+  /** ISO date the agreement ends (inclusive); absent/null means "open". */
+  validUntil?: string | null;
 }
 
 export interface DocumentLineSnapshot {
@@ -81,21 +87,50 @@ function round4(value: string | null): string {
 }
 
 /**
+ * Whether a customer agreement is in force on a given day.
+ *
+ * A window with no bounds never expires. A window *with* bounds but no date to
+ * test against is treated as not in force: an unverifiable agreement is never
+ * silently charged. Both bounds are inclusive.
+ */
+function isOverrideInForce(
+  override: CustomerCatalogueOverride,
+  asOf: string | null | undefined,
+): boolean {
+  const from = override.validFrom ?? null;
+  const until = override.validUntil ?? null;
+  if (!from && !until) return true;
+  if (!asOf) return false;
+
+  const at = Date.parse(asOf);
+  if (Number.isNaN(at)) return false;
+  if (from && at < Date.parse(from)) return false;
+  if (until && at > Date.parse(until)) return false;
+  return true;
+}
+
+/**
  * Builds the frozen line for a quantity of a catalogue item.
  *
- * A customer override is applied only when it exists AND is available; an
- * unavailable customer entry deliberately falls back to the catalogue price so a
- * suspended agreement can never be silently charged. The chosen source is
- * reported back in `priceSource`.
+ * A customer override is applied only when it exists, is available AND is in
+ * force on `asOf`; an unavailable or out-of-window entry deliberately falls back
+ * to the catalogue price so a suspended or expired agreement can never be
+ * silently charged. The chosen source is reported back in `priceSource`.
  */
 export function buildDocumentLineSnapshot(input: {
   item: CatalogueItemSource;
   override?: CustomerCatalogueOverride | null;
   quantity: string;
+  /** The date the line is written, ISO string. Used to test the validity window. */
+  asOf?: string | null;
 }): DocumentLineSnapshot {
   const { item } = input;
   const override =
-    input.override && input.override.isAvailable ? input.override : null;
+    input.override &&
+    input.override.isAvailable &&
+    isOverrideInForce(input.override, input.asOf)
+      ? input.override
+      : null;
 
   const quantity = round4(input.quantity);
   const unitPrice = round4(override?.agreedPrice ?? item.unitPrice);
@@ -120,7 +155,7 @@ export function buildDocumentLineSnapshot(input: {
     itemId: item.itemId,
     description: override?.customName || item.name,
     itemCode: override?.customCode ?? item.sku,
-    unitOfMeasure: item.unitOfMeasure,
+    unitOfMeasure: override?.customUnitOfMeasure || item.unitOfMeasure,
     quantity,
     unitPrice,
     currency: item.currency,

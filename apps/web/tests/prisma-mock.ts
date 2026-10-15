@@ -65,6 +65,11 @@ export const prismaMock = {
   // Audit rows are appended through `$executeRaw`, never through this delegate —
   // see `apps/web/src/lib/audit/index.ts` for the RLS reason.
   auditLog: mockDelegate(),
+  // Phase 06 server half: the push receipt store and the pull tombstone store.
+  // They are ordinary models in `schema.prisma`, so they get ordinary delegates
+  // for the same reason the comment at the top of this file gives.
+  syncOperation: mockDelegate(),
+  syncDeletion: mockDelegate(),
   $transaction: vi.fn(async (arg: unknown) =>
     typeof arg === "function"
       ? await (arg as (tx: unknown) => Promise<unknown>)(prismaMock)

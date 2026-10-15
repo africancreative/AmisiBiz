@@ -274,18 +274,30 @@ surface. Distinct from "Phase 03 — Tenant lifecycle" above.
   actions and empty states; en/fr/sw catalogues. Exact text-based decimal
   arithmetic (`@amisibiz/documents/decimal`); the pure catalogue→document-line
   snapshot builder (`buildDocumentLineSnapshot`, copies item details/price, applies
-  an available customer override, never recomputes an existing line); and the
-  tenant-scoped repository ports for a future SQLite/offline adapter
-  (`@amisibiz/domain/repositories`).
-- **Tests:** `tests/phase03-dashboard-catalogue.test.ts` (23) — dashboard
-  authorization/scoping/arithmetic, snapshot immutability, exact decimal maths,
-  and an in-memory implementation of all three ports. Suite total **279 passed /
-  13 skipped**; lint/type-check/build green.
-- **Honest limits:** not browser-exercised; the snapshot builder is not yet wired
-  into an issuing action (Phase 05 is gated); "outstanding" is
-  invoiced-not-yet-settled (no payment netting until Phase 05); RLS still inert.
+  an available customer override **only inside its validity window**, never
+  recomputes an existing line); and the tenant-scoped repository ports for a future
+  SQLite/offline adapter (`@amisibiz/domain/repositories`).
+- **Customer-catalogue delta (2026-10-15):** `ContactItem` gained the two terms the
+  brief names that Phase 04 did not carry — a customer-specific **unit of measure**
+  and a **validity window** (`validFrom`/`validUntil`, either bound open). Enforced
+  at three layers: the Zod schemas (inverted pair rejected), the Server Action (a
+  one-sided edit is checked against the stored window), and a migration CHECK
+  constraint. Migration `20261022000000_phase03_contact_item_units_and_validity`
+  is authored and the Prisma client regenerated, **not applied to the live project**.
+- **Tests:** `tests/phase03-dashboard-catalogue.test.ts` (35, was 23) — dashboard
+  authorization/scoping/arithmetic, snapshot immutability, exact decimal maths, an
+  in-memory implementation of all three ports, and the new customer unit/validity
+  rules. Cross-tenant, required-field, invalid-price, permissions, search,
+  pagination and archiving cases for the CRM/item/contact-item actions, plus the
+  action-level one-sided-window guard, live in `tests/phase04-security.test.ts`
+  (79). Web suite total **398 passed / 26 skipped**; format/lint/type-check/build
+  green.
+- **Honest limits:** not browser-exercised; migration `20261022000000` is not
+  applied to the live project; the snapshot builder is the canonical path but is
+  not yet wired into the issuing action (Phase 05 freezes payload values after
+  ownership validation); "outstanding" is invoiced-not-yet-settled; RLS still inert.
 - **Report:** `phase-03-business-workspace-dashboard-report.md`.
-- **Depends on:** Phase 04 (CRM/catalogue).
+- **Depends on:** Phase 04 (CRM/catalogue); Phase 05 (frozen lines, payment netting).
 
 ### Phase 03.5 — Supabase alignment & tenant-provisioning audit ✅ COMPLETE
 
@@ -342,6 +354,7 @@ surface. Distinct from "Phase 03 — Tenant lifecycle" above.
     (Prisma singleton, Supabase admin client, aggregated env validation),
     `@amisibiz/domain` (validation/contrast), `@amisibiz/documents` (money,
     series, PDF contracts), `@amisibiz/sync` (offline contracts, design-only),
+    `@amisibiz/integrations` (eTIMS / payments / POS boundaries, mocks only),
     `@amisibiz/ui` (21 components, deep-import subpaths); Capacitor Android
     (`apps/mobile`) and Tauri 2 Windows (`apps/desktop`) configured scaffolds
     with verified feasibility tables (JDK 17 + Android SDK present; Rust
@@ -361,8 +374,15 @@ surface. Distinct from "Phase 03 — Tenant lifecycle" above.
     queue, tombstones, client-generated UUIDs, idempotency, revocation and
     maximum-authorization-freshness policy) — design only, before any offline
     implementation.
-  - **04.5e — DPO Group / eTIMS interface design** (design only — no simulated
-    live payments, no undocumented DPO assumptions, eTIMS stays separate).
+  - **04.5e — DPO Group / eTIMS / POS integration boundaries** — **design +
+    contracts done** (the owner's "Phase 7: integration boundaries"). Provider-neutral
+    ports in `packages/integrations` (`@amisibiz/integrations`), an
+    explicitly-labelled mock adapter set that can never fabricate confirmation
+    (a verified outcome is only constructible with `source: "provider"`), and rule
+    tests in `phase045e-integration-boundaries.test.ts`; design and the
+    explicit "not built" list in `../architecture/integration-boundaries.md`.
+    **No live call, no credential, no payment processing, no stock deduction**;
+    eTIMS stays a separate system and the POS port is extension points only.
 - **Explicitly excluded:** branding and logo storage stay as shipped in Phase
   04 (owner decision, 2026-10-14). Supabase Storage for generated documents is
   planned inside Phase 05.
@@ -570,11 +590,62 @@ portalUserId])`, so a `CUSTOMER_PORTAL_USER` maps to at most one contact per
   when the numbering was reconciled; Supabase Storage adoption is decided
   there. Kept as a stub for traceability only.
 
-### Phase 07 — Audit viewer & observability
+### Phase 06 — Offline client architecture 🟡 CLIENT HALF COMPLETE, SERVER HALF NOT BUILT
 
-- Tasks: central `lib/audit` writer (done); audit viewer for platform/tenant admins; structured redacting logger; error tracking.
-- **Acceptance:** privileged actions emit audit rows; viewer permission-gated; no secrets/PII leakage in logs.
+- Directive scope: shared repository architecture for installed Android (Capacitor)
+  and Windows (Tauri) clients — SQLite local storage, offline operations, durable
+  outbox + synchronization client, platform validation, documented limits.
+- Owner decisions for the phase: commit Phase 4 first (`e0a75cd`); **Android real,
+  Windows documented as blocked**; **shared SQL + one driver adapter per platform**;
+  **static offline client in the shells**.
+- Built and green: `@amisibiz/offline` (driver abstraction, checksummed migration
+  runner, local schema, repositories, `LocalOutbox`, `SyncClient`); `@amisibiz/sync`
+  contracts reshaped (`entity`/`entityId`, `schemaVersion`, `serverTime`, `release()`,
+  runtime `CONFLICT_RESOLUTIONS`); 31 storage tests + 17 engine tests on real SQLite;
+  the bundle secret scan now also covers both shell `web/` directories.
+- Not built (do not read the phase as done): `/api/sync/push` + `/api/sync/pull`, the
+  bearer session wrapper, `SyncOperation` receipts, `SyncDeletion` tombstones, and any
+  `revision` column on `Contact`/`Item`/`ContactItem`/`Document`; the shell UI; an
+  Android project or build; any Windows build (no Rust/MSVC, and
+  `@tauri-apps/plugin-sql` 2.6.0 has no transaction API).
+- **Gate held:** conflict, authorization-expiry, suspension and recovery have named
+  passing tests **on the device** and none against a server, so the offline feature set
+  is **not** production-ready.
+- **Report:** `phase-06-offline-client-report.md`; design and limits:
+  `../architecture/offline-client-design.md` (§12 lists built vs not built).
+
+### Phase 07 — Audit viewer & observability ✅ COMPLETE (repository half)
+
+- Tasks: central `lib/audit` writer (**already existed**); audit viewer for
+  platform/tenant admins; structured redacting logger; error tracking.
+- Built: **recursive** redaction shared by the writer and the logger
+  (`lib/redaction.ts`; a credential-shaped key is omitted at every depth, where the
+  old pass only walked the top level — the one real defect this phase closed), with
+  the audit-hygiene test still asserting the surviving key list; the isomorphic
+  `lib/logger.ts` (one JSON record per line in production, a readable line in
+  development, importing nothing server-only so a client boundary shares the exact
+  rule); `lib/error-tracking.ts` (`reportError` returns a correlation digest and
+  emits `message`/`stack` **only** in development); the tenant viewer at
+  `/[locale]/app/settings/audit` (`audit.read` — owner/admin, plus a read-only
+  support grant) and the platform viewer at `/[locale]/platform/audit`
+  (`platform.audit.read`, SUPER_ADMIN only), both served by one `AuditLogViewer`
+  client over `getAuditLogAction` / `getPlatformAuditLogAction`; `global-error.tsx`
+  added and the locale boundary wired to `reportError`.
+- **Acceptance:** privileged actions already emit audit rows through `recordAudit`;
+  both viewers are permission-gated in the server action on every fetch; the 9
+  Phase 07 tests lock recursive redaction (audit **and** logger), the withheld raw
+  message in a non-development report, permission denial, forged-tenant denial,
+  tenant scoping, the platform cross-tenant read and the page-size bound.
+- **Boundary, stated explicitly:** no error-tracking SaaS is wired — that needs a
+  vendor account and a credential, neither of which exists, so the integration is
+  **not** claimed; `reportError` is the single boundary a backend is later pointed
+  at. The viewer does not self-audit reads (walking the trail must not append to
+  it); the audited event is the support grant's `support.accessUsed`.
+- **Gate:** `format:check` clean, `lint` 0 errors / 1 known `<img>` warning,
+  `type-check` green, **407 passed / 26 skipped**, build green with both new routes
+  (`/en/app/settings/audit`, `/en/platform/audit`). Uncommitted.
 - **Depends on:** Phase 03.
+- **Report:** `phase-07-audit-observability-report.md`.
 
 ### Phase 08 — Hardening & release readiness
 

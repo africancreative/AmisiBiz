@@ -198,6 +198,7 @@
       "items": "Items",
       "documents": "Documents",
       "branding": "Branding",
+      "audit": "Audit log",
       "team": "Team",
       "dashboard": "Dashboard"
     },
@@ -206,6 +207,39 @@
     "noAccessTitle": "Access unavailable",
     "noAccessDescription": "You no longer have access to this workspace, or it is closed to you. If that is unexpected, contact your business administrator or the provider.",
     "readonlyBanner": "This organisation is suspended. You can read, print and download what it already has; new writes and synchronization are refused until the provider lifts the suspension."
+  },
+  "audit": {
+    "title": "Audit trail",
+    "description": "A record of privileged activity in this workspace. Entries are written by the server and can be neither edited nor deleted.",
+    "platformTitle": "Platform audit trail",
+    "platformDescription": "Privileged activity across every workspace. This cross-tenant view requires the platform audit permission.",
+    "filters": {
+      "action": "Action",
+      "actionPlaceholder": "e.g. document.issued",
+      "resource": "Resource",
+      "resourcePlaceholder": "e.g. Document",
+      "tenant": "Workspace",
+      "allTenants": "All workspaces",
+      "from": "From",
+      "to": "To",
+      "apply": "Apply",
+      "reset": "Reset"
+    },
+    "columns": {
+      "when": "When",
+      "action": "Action",
+      "actor": "Actor",
+      "tenant": "Workspace",
+      "resource": "Resource"
+    },
+    "empty": {
+      "title": "No audit events",
+      "description": "No entries match these filters. Resetting them shows the most recent activity."
+    },
+    "system": "System",
+    "platform": "Platform",
+    "loadFailed": "The audit trail could not be loaded. Please try again.",
+    "showing": "Showing {from}–{to} of {total}"
   },
   "modules": {
     "newButton": "New",

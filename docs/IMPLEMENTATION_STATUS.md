@@ -1,8 +1,10 @@
 # AmisiBiz — Implementation Status
 
-- **Updated:** 2026-10-15 (the Phase 4 directive — quotations, invoices and
-  delivery notes — through verification; documentation committed, business code
-  still in the working tree pending the owner's commit decision).
+- **Updated:** 2026-10-15 (Phase 6 offline client: the storage layer, outbox and sync
+  engine are built and tested on real SQLite; the server half, the shell UI and both
+  platform builds are not — `implementation/phase-06-offline-client-report.md`. The
+  Phase 4 business code is still in the working tree pending the owner's commit
+  decision).
 - **Read with:** `implementation/phase-checklist.md` (phase plan & gates),
   `architecture/security-model.md` §13–§14 (what enforcement exists and what does
   not), `architecture/permission-matrix.md`, `administration/provider-console.md`
@@ -99,13 +101,13 @@
 | Scoped DB context                  | Implemented (task #35)                                      | `scope.ts` writes the five transaction-local GUCs; fail-closed `ScopeNotSetError`; claims re-read from rows by `SECURITY DEFINER` helpers                                                                                                                                                                |
 | Supabase Storage                   | Policies only; app still uses filesystem `/uploads`         | `tenant-branding` bucket + path-scoped object policies (migration 10 §7); adoption is task #36                                                                                                                                                                                                           |
 | DB-backed integration harness      | Runs, never in CI                                           | `integration-security.test.ts` — 26 cases as `amisibiz_app`, green against a disposable PostgreSQL; self-skips without `TEST_DATABASE_URL`. A `security` CI job exists (#37d) and has been rehearsed step by step locally, but no workflow run exists (no push) — task #37 closes only on one of those   |
-| Monorepo & shared packages         | Committed (`f0dfe59`) — still no remote push                | Turborepo 2.11.8; 7 source-only packages; 11 workspace projects                                                                                                                                                                                                                                          |
+| Monorepo & shared packages         | Committed (`f0dfe59`) — still no remote push                | Turborepo 2.11.8; 8 source-only packages; 12 workspace projects                                                                                                                                                                                                                                          |
 | Client shells (Android / Windows)  | Scaffolded only — never compiled                            | Capacitor 8 / Tauri 2; feasibility + prerequisites in each README                                                                                                                                                                                                                                        |
 | CI (GitHub Actions)                | Workflow added — not yet run on GitHub                      | Sequence rehearsed green from a pristine copy (18/18 turbo tasks)                                                                                                                                                                                                                                        |
 | Offline / SQLite                   | Not started (by design)                                     | Contracts in `@amisibiz/sync`; 04.5d design first                                                                                                                                                                                                                                                        |
 | PDF rendering / download           | Implemented in the working tree — **bytes never inspected** | Dependency-free A4 writer in `@amisibiz/documents` (pagination, repeated table header, page numbers, tenant colours/logo), rendered only from the frozen snapshot; tests assert `%PDF-1.4` … `%%EOF` and byte determinism, no multi-page or logo render was produced or opened                           |
-| DPO payments / POS                 | Not started (design-only phase pending)                     | 04.5e; no simulated live payments                                                                                                                                                                                                                                                                        |
-| KRA/eTIMS                          | Out of scope (separate system; integration note only)       | 04.5e note                                                                                                                                                                                                                                                                                               |
+| DPO payments / POS                 | Boundaries only — **no live adapter**                       | Owner's Phase 7 / 04.5e: provider-neutral ports + explicitly-labelled mocks in `@amisibiz/integrations`; no credential, no network call, no payment processing, no stock deduction                                                                                                                       |
+| KRA/eTIMS                          | Boundaries only — **separate system**                       | Owner's Phase 7 / 04.5e: `EtimsAdapter` + `etimsLabel` (only a verified provider confirmation reads `recognized`); no submission is ever made                                                                                                                                                            |
 | Vercel deployment                  | Not configured (no `vercel.json`/`.vercel`)                 | Phase 08; no deploy claimed                                                                                                                                                                                                                                                                              |
 
 ## Verification status (last run 2026-10-14, Phase 2 / task #45 — superseded for the current tree by the follow-up run below)
@@ -172,6 +174,29 @@ acceptance mapping and the list of product gaps:
 | `scripts/db/cleanroom-chain.sh p4_report_chain`         | **78 · 71 + SKIP · 71 + SKIP · 55 · 72 PASS, 0 FAIL**; abort probe fires; step 13 applies `20261020000000` → `20261021000000` → `20261021000001`                                                         |
 | live Supabase project                                   | **unchanged** — 10 applied, 11 and 12 pending, zero business data, no probe run; **RLS still inert (#38)**                                                                                               |
 | **not** verified                                        | the clause-by-clause engine audit (#55, stopped mid-review), any PDF opened or printed, any browser walkthrough, numbering concurrency outside the SQL script, and everything that needs a live database |
+
+### Phase 6 directive run — offline client architecture (2026-10-15, tasks #58–#60)
+
+The client half of the offline stack is implemented and executed against real SQLite
+(`node:sqlite`). The server half is **not**: there are no sync endpoints, no bearer
+session wrapper, no `SyncOperation` receipt table, no `SyncDeletion` tombstones, and no
+`revision` column on `Contact`/`Item`/`ContactItem`/`Document`. Detail:
+`implementation/phase-06-offline-client-report.md`; design and limits:
+`architecture/offline-client-design.md` (its §12 is the built / not-built list).
+
+| Gate                                                                                | Result                                                                                                                                                              |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm --filter @amisibiz/web exec vitest run tests/phase06-offline-storage.test.ts` | **31 passed** — migration guard, repositories, outbox, pull applier, conflicts                                                                                      |
+| `pnpm --filter @amisibiz/web exec vitest run tests/phase06-sync-engine.test.ts`     | **17 passed** — `SyncClient` against a `SyncTransport` **contract stub**, incl. restart-recover with a duplicate retry that applied nothing twice                   |
+| `pnpm --filter @amisibiz/web exec vitest run`                                       | **385 passed / 26 skipped** (15 files; the skip is `integration-security.test.ts`, needs `TEST_DATABASE_URL`)                                                       |
+| `pnpm type-check` / `pnpm lint` / `pnpm format:check`                               | green (9/9 tasks) / **0 errors**, 1 known `<img>` warning / clean                                                                                                   |
+| `pnpm build`                                                                        | green — Next.js production build                                                                                                                                    |
+| `pnpm check:bundles`                                                                | clean — **207 files / 5.5 MB**, now also scanning `apps/mobile/web` and `apps/desktop/web` (installed apps are client bundles too)                                  |
+| `scripts/db/cleanroom-chain.sh`                                                     | **not re-run — no Postgres migration was added this phase**; the local SQLite migration runner is covered by the two batteries above                                |
+| live Supabase project                                                               | **unchanged** — no probe, no migration, zero business data; **RLS still inert (#38)**, so every authorization claim here is application-layer                       |
+| Android                                                                             | prerequisites verified (JDK 17, SDK, `@capacitor/cli`), **no `android/` project generated, no Gradle build, no device run**                                         |
+| Windows                                                                             | **blocked, not built** — no Rust/MSVC, and `@tauri-apps/plugin-sql` 2.6.0 has no transaction API and binds `$n` instead of `?`                                      |
+| **gate**                                                                            | conflict, authorization-expiry, suspension and recovery: **passing on the device, untested against a server** → the offline feature set is **not production-ready** |
 
 ## Open risks (top items — full register: `implementation/phase-04.5b-monorepo-and-clients-audit.md` §5)
 

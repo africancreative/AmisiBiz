@@ -105,29 +105,31 @@ export type AuditEvent = {
   userAgent?: string | null;
 };
 
-const SENSITIVE_KEYS = [
-  "password",
-  "token",
-  "tokenhash",
-  "secret",
-  "authorization",
-  "cookie",
-];
+/**
+ * Substrings that mark a key as carrying a credential or a session artifact —
+ * re-exported so existing importers and tests keep their entry point, while the
+ * definition itself lives in the isomorphic `redaction` module that the logger
+ * also uses.
+ */
+export {
+  SENSITIVE_KEY_FRAGMENTS,
+  isSensitiveKey,
+  redactValue,
+  redactSecrets,
+} from "@/lib/redaction";
+
+import { redactSecrets } from "@/lib/redaction";
 
 /**
- * Strips obvious secrets from audit metadata so credentials are never
- * persisted in the audit log.
+ * Strips secrets from audit metadata so credentials are never persisted in the
+ * audit log. Recursive, and exported so callers and tests can assert the audit
+ * writer's rule directly.
  */
-function sanitize(
+export function sanitizeAuditMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): Prisma.InputJsonValue | undefined {
   if (!metadata) return undefined;
-  const clean: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(metadata)) {
-    if (SENSITIVE_KEYS.some((s) => key.toLowerCase().includes(s))) continue;
-    clean[key] = value;
-  }
-  return clean as Prisma.InputJsonValue;
+  return redactSecrets(metadata) as Prisma.InputJsonValue;
 }
 
 /**
@@ -146,10 +148,10 @@ export async function appendAuditLog(
   tx: ScopedTx,
   event: AuditEvent,
 ): Promise<void> {
-  const metadata = sanitize(event.metadata);
+  const metadata = sanitizeAuditMetadata(event.metadata);
   // Serialise the SANITIZED value: persisting `event.metadata` here would write
   // the raw payload — including any `password`/`token`/`secret` key — straight
-  // into the audit trail, which is exactly what `sanitize` exists to prevent.
+  // into the audit trail, which is exactly what redaction exists to prevent.
   const json = metadata === undefined ? null : JSON.stringify(metadata);
 
   await tx.$executeRaw`

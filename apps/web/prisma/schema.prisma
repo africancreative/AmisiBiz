@@ -150,6 +150,11 @@ model Tenant {
   documentStatusEvents DocumentStatusEvent[]
   documentNumberings   DocumentNumbering[]
   documentSequences    DocumentNumberSequence[]
+  // Phase 06 server half: idempotency receipts for pushed operations, and the
+  // tombstones a hard delete leaves behind so an offline device drops the row
+  // instead of keeping a ghost.
+  syncOperations       SyncOperation[]
+  syncDeletions        SyncDeletion[]
 
   @@index([slug])
   @@index([status])
@@ -178,12 +183,71 @@ model Plan {
   status      PlanStatus @default(ACTIVE)
   sortOrder   Int        @default(0)
 
+  // Relation is kept for catalogue lookup; active subscription is on the Tenant
   tenants Tenant[] @relation("TenantPlan")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status, sortOrder])
+}
+
+/**
+ * Subscription — per-tenant billing state.
+ *
+ * This is the authoritative source for a tenant's subscription state.
+ * `status` is independent of `Tenant.status` (lifecycle: PENDING/ACTIVE/SUSPENDED).
+ * Payment fields are intentionally opaque: the console never claims payment
+ * confirmation from a browser‐initiated response.  Status changes come from
+ * verified provider events or a controlled reconciliation process.
+ *
+ * The `app_subscription_accepts_writes()` RLS policy mirrors this: a
+ * subscription in TRIAL or PAUSED mode still allows reads, but writes are
+ * governed by the tenant's `Tenant.status` gate.
+ */
+model Subscription {
+  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String     @db.Uuid // Unique: one subscription per tenant
+  planId            String     @db.Uuid // Plan from the catalogue
+  status            String     // ACTIVE, PAUSED, TRIAL, CANCELLED, ARCHIVED
+  current_period_start DateTime? // Start of the current billing period
+  current_period_end   DateTime? // End of the current billing period
+  trial_start         DateTime? // When the trial period began (if any)
+  trial_end           DateTime? // When the trial period ends (if any)
+  cancel_at_period_end Boolean   @default(false)
+  canceled_at         DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan Plan @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId])
+  @@index([status])
+  @@index([planId])
+}
+
+/**
+ * Subscription status history — append‑only audit trail.
+ *
+ * Every status change (ACTIVE → PAUSED, TRIAL → ACTIVE, etc.) is recorded
+ * here so that the console can display a changelog and operators can
+ * investigate billing decisions.  The `changedBy` field references the
+ * platform administrator who triggered the change.
+ */
+model SubscriptionStatusHistory {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subscriptionId String     @db.Uuid
+  from_status  String?       // Previous status before the change
+  to_status    String       // New status after the change
+  changed_by   String?       // Platform administrator UUID
+  reason       String?       // Business justification — optional but recommended
+  createdAt  DateTime      @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([createdAt])
 }
 
 // ─── Tenant settings (per-tenant configuration) ───────────────────────────────
@@ -210,23 +274,55 @@ model TenantSettings {
 model TenantBranding {
   id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   tenantId            String   @unique @db.Uuid
-  displayName         String?
-  registeredName      String?
-  primaryColor        String   @default("#1d4ed8")
-  secondaryColor      String   @default("#1e3a5f")
-  accentColor         String   @default("#f59e0b")
-  primaryForeground   String   @default("#f8fafc")
-  logoUrl             String?
-  contactEmail        String?
-  contactPhone        String?
-  postalAddress       String?
-  physicalAddress     String?
-  website             String?
-  taxPin              String?
-  currency            String   @default("KES")
-  defaultFooter       String?
-  paymentInstructions String?
-  documentLayout      String   @default("standard")
+  displayName         String? // Business display name shown on documents
+  registeredName      String? // Registered legal name
+  primaryColor        String   @default("#1d4ed8") // Brand primary color (hex)
+  secondaryColor      String   @default("#1e3a5f") // Brand secondary color (hex)
+  accentColor         String   @default("#f59e0b") // Brand accent color (hex)
+  primaryForeground   String   @default("#f8fafc") // Foreground text color (hex)
+  logoUrl             String? // URL to logo stored in cloud storage or Supabase
+  contactEmail        String? // Contact email displayed on documents
+  contactPhone        String? // Contact phone displayed on documents
+  postalAddress       String? // Postal address for documents
+  physicalAddress     String? // Physical address for documents
+  website             String? // Website URL
+  taxPin              String? // Tax identification number
+  currency            String   @default("KES") // ISO 4217 currency code
+  defaultFooter       String? // Default footer text on documents
+  documentLayout      String   @default("standard") // Document layout model
+  
+  // Invoice template settings
+  invoiceTemplate     String   @default("standard") // Invoice template model
+  invoiceCustomizations Json? // Custom JSON for invoice template overrides
+  
+  // Quotation template settings
+  quotationTemplate   String   @default("standard") // Quotation template model
+  quotationCustomizations Json? // Custom JSON for quotation template overrides
+  
+  // Delivery note template settings
+  deliveryNoteTemplate String   @default("standard") // Delivery note template model
+  deliveryNoteCustomizations Json? // Custom JSON for delivery note template overrides
+  
+  // Document numbering preferences
+  documentNumberingPrefix String   @default("") // Custom prefix for document numbers
+  documentNumberingPadding Int      @default(4) // Zero-padding digits for document numbers
+  documentPeriodStyle     String   @default("CALENDAR_YEAR") // Period style for numbering
+  fiscalStartMonth        Int      @default(1) // Fiscal year start month (1=January)
+  
+  // eTIMS integration compatibility (future)
+  etimsCompatible      Boolean  @default(false) // Flag for eTIMS compatibility
+  etimsDocumentType    String? // eTIMS document type code
+  etimsSerialNumber    String? // eTIMS serial number (if applicable)
+  etimsLastSync        DateTime? // Last eTIMS synchronization timestamp
+  
+  // Provider configuration (per-tenant settings that work with global admin config)
+  // Cloudinary upload preset per tenant (for organized asset storage)
+  cloudinaryPresetName String? // Cloudinary preset name for this tenant's assets
+  // DPO integration status per tenant
+  dpoIntegrationStatus String? // DPO integration status: "pending", "active", "error"
+  // Mailtrap from email for this tenant's emails
+  mailtrapFromEmail String? // From email address for tenant communications
+  
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
@@ -405,6 +501,10 @@ model Contact {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   archivedAt  DateTime?
+  // Monotonic server revision. Bumped by the `amisibiz_bump_revision` trigger on
+  // every UPDATE. It is the ordering authority an offline pull compares against,
+  // never a device clock.
+  revision    Int           @default(1)
 
   // ── Customer-portal linkage ──────────────────────────────────────────────
   // A portal user is an ordinary `User` whose `TenantMember.role` is
@@ -476,6 +576,9 @@ model Item {
   notes         String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
+  // Monotonic server revision, maintained by the `amisibiz_bump_revision`
+  // trigger (see Contact.revision).
+  revision      Int        @default(1)
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   taxRate       TaxRate?       @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
@@ -492,17 +595,26 @@ model Item {
 // ─── Customer-specific item catalogue ─────────────────────────────────────────
 
 model ContactItem {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId        String   @db.Uuid
-  contactId       String   @db.Uuid
-  itemId          String   @db.Uuid
-  customCode      String? // Customer-specific item code
-  customName      String? // Customer-specific description
-  agreedPrice     Decimal  @db.Decimal(18, 4) // Override price for this customer
-  discountPercent Decimal  @default(0) @db.Decimal(5, 2) // e.g. 10.00 for 10%
-  isAvailable     Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String    @db.Uuid
+  contactId           String    @db.Uuid
+  itemId              String    @db.Uuid
+  customCode          String? // Customer-specific item code
+  customName          String? // Customer-specific description
+  customUnitOfMeasure String? // Customer-specific unit of measure
+  agreedPrice         Decimal   @db.Decimal(18, 4) // Override price for this customer
+  discountPercent     Decimal   @default(0) @db.Decimal(5, 2) // e.g. 10.00 for 10%
+  isAvailable         Boolean   @default(true)
+  // Agreement validity window. Either bound may be open; the agreement is only
+  // applied to a new line whose date falls inside it. A missing window means the
+  // agreement does not expire.
+  validFrom           DateTime?
+  validUntil          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  // Monotonic server revision, maintained by the `amisibiz_bump_revision`
+  // trigger (see Contact.revision).
+  revision            Int       @default(1)
 
   tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -636,6 +748,9 @@ model Document {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  // Monotonic server revision, maintained by the `amisibiz_bump_revision`
+  // trigger (see Contact.revision).
+  revision  Int      @default(1)
 
   tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contact          Contact?              @relation(fields: [contactId], references: [id], onDelete: SetNull)
@@ -846,6 +961,7 @@ model User {
   documentsVoided       Document[]            @relation("DocumentVoidedBy")
   paymentsReversed      DocumentPayment[]     @relation("DocumentPaymentReversedBy")
   documentStatusEvents  DocumentStatusEvent[] @relation("DocumentStatusEventActor")
+  syncOperations        SyncOperation[]
   // Contacts this user may read through the customer portal (usually at most one).
   portalContacts        Contact[]             @relation("ContactPortalAccess")
 
@@ -903,27 +1019,80 @@ model Invitation {
 // ─── Audit Log ────────────────────────────────────────────────────────────────
 
 model AuditLog {
-  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId   String? @db.Uuid // null for system-level events
-  userId     String? @db.Uuid // null for system events
-  action     String // e.g. "tenant.created", "user.invited", "invoice.approved"
-  resource   String? // e.g. "Invoice", "User"
-  resourceId String? // ID of the affected record (polymorphic — intentionally not an FK)
-  metadata   Json? // Additional context (sanitised, no PII unless required)
-  ipAddress  String?
-  userAgent  String?
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String?  @db.Uuid // null for system-level events
+  userId            String?  @db.Uuid // null for system events
+  action            String // e.g. "tenant.created", "user.invited", "invoice.approved"
+  resource          String? // e.g. "Invoice", "User"
+  resourceType      String? // e.g. "tenant", "user", "plan", "branding"
+  outcome           String // e.g. "success", "failed", "denied"
+  outcomeDetails    String? // Free-form summary of outcome
+  correlationId     String? // Request ID or correlation identifier for tracking
+  metadata          Json?   // Additional context (sanitised, no PII unless required)
+  ipAddress         String?
+  userAgent         String?
+  createdAt         DateTime @default(now())
 
-  createdAt DateTime @default(now())
-
-  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenant            Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user              User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([userId])
   @@index([action])
   @@index([createdAt])
-  // The provider console's per-tenant read ("latest activity for these tenants")
-  // groups by tenant over a descending time ordering, so the index carries the
-  // sort order the query actually uses (migration 11, section 7).
+  @@index([correlationId])
   @@index([tenantId, createdAt(sort: Desc)], map: "AuditLog_tenantId_createdAt_idx")
+}
+
+// ─── Phase 06 server half: sync idempotency & tombstones ──────────────────────
+//
+// The push endpoint is idempotent by table, not by heuristic. `SyncOperation` is
+// the receipt store: the unique key `(clientId, operationId)` is the client's own
+// idempotency key, so a retry after a lost response answers the original outcome
+// instead of applying the operation a second time. `outcome` is one of
+// `applied | duplicate | rejected | conflict`; `revision` carries the row's
+// revision for an `applied`/`duplicate`, `reason` the refusal text for a
+// `rejected`, and `conflictId` names the disagreement for a `conflict`.
+//
+// `SyncDeletion` is a tombstone: a hard-deleted row that a device may still hold
+// a copy of. The pull endpoint turns each tombstone into a `deleted` frame so the
+// device drops the row instead of keeping a ghost record no one can explain.
+
+model SyncOperation {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId    String
+  operationId String   @db.Uuid
+  tenantId    String   @db.Uuid
+  userId      String   @db.Uuid
+  entity      String
+  entityId    String
+  outcome     String
+  revision    Int?
+  reason      String?
+  conflictId  String?
+  createdAt   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, operationId])
+  @@index([tenantId, createdAt])
+  @@index([userId])
+}
+
+model SyncDeletion {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @db.Uuid
+  entity      String
+  entityId    String
+  revision    Int
+  deletedAt   DateTime @default(now())
+  // Best-effort attribution. No FK: a tombstone must survive the deletion of the
+  // actor, because the device still has to be told the row is gone.
+  deletedById String?  @db.Uuid
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, entity, entityId])
+  @@index([tenantId, deletedAt])
 }

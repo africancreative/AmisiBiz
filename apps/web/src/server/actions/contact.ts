@@ -9,6 +9,7 @@ import { PERMISSIONS } from "@amisibiz/auth";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
 import { fail, type ActionResult } from "@/lib/errors";
 import { authorizationFailure, invalidInput } from "@/server/actions/_shared";
+import type { CreateActionOptions } from "@/server/actions/_shared";
 import {
   createContactSchema,
   updateContactSchema,
@@ -121,6 +122,7 @@ function addressCreateData(
 
 export async function createContactAction(
   rawInput: unknown,
+  options?: CreateActionOptions,
 ): Promise<ActionResult<{ contactId: string }>> {
   const session = await requireAuth();
 
@@ -163,6 +165,10 @@ export async function createContactAction(
     const contact = await prisma.$transaction(async (tx) => {
       const created = await tx.contact.create({
         data: {
+          // The offline path supplies the id the device minted (`options.rowId`),
+          // so a replayed create is recognised as the same row. It is not part of
+          // the validated payload, so a form cannot set a row's identity.
+          ...(options?.rowId !== undefined ? { id: options.rowId } : {}),
           tenantId: context.tenantId,
           type: data.type,
           firstName: data.firstName?.trim() || null,

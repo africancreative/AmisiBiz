@@ -11,8 +11,10 @@ import {
   PackageIcon,
   FileTextIcon,
   SettingsIcon,
+  ShieldIcon,
 } from "@amisibiz/ui/icons";
 import { getInitials } from "@/lib/utils";
+import { PERMISSIONS, tenantRoleHasPermission } from "@amisibiz/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +76,20 @@ export default async function WorkspaceLayout({
       label: t("nav.branding"),
       icon: <SettingsIcon />,
     },
+    // Only owners/admins hold `audit.read` (and a provider support grant, held
+    // read-only). The page guard still enforces it; hiding the entry just avoids
+    // offering a link that would immediately render "access denied".
+    ...(state.status === "ok" &&
+    (state.context.via === "support_grant" ||
+      tenantRoleHasPermission(state.context.role, PERMISSIONS.AUDIT_READ))
+      ? [
+          {
+            href: `/${locale}/app/settings/audit`,
+            label: t("nav.audit"),
+            icon: <ShieldIcon />,
+          },
+        ]
+      : []),
     { href: `/${locale}/team`, label: t("nav.team"), icon: <UsersIcon /> },
     {
       href: `/${locale}/dashboard`,
