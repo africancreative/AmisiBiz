@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { getTranslations } from "next-intl/server";
 import { requireAuth, getPrimaryMembership } from "@/lib/auth/helpers";
 import { SignOutButton } from "@/components/auth/sign-out-button";
@@ -12,6 +13,10 @@ export default async function DashboardPage({
   const { locale } = await params;
   const session = await requireAuth(locale);
   const membership = await getPrimaryMembership(session.user.id);
+
+  if (!membership && session.user.platformRole === "SUPER_ADMIN") {
+    redirect(`/${locale}/admin`);
+  }
 
   const t = await getTranslations("dashboard");
   const tNav = await getTranslations("nav");

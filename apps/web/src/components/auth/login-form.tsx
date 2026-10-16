@@ -38,10 +38,14 @@ export function LoginForm({ locale }: { locale: string }) {
     // Only honour callback URLs that stay within this locale's routes to
     // prevent open-redirect abuse.
     const callbackUrl = searchParams.get("callbackUrl");
+    const defaultTarget =
+      result.data?.platformRole === "SUPER_ADMIN"
+        ? `/${locale}/admin`
+        : `/${locale}/dashboard`;
     const target =
       callbackUrl && callbackUrl.startsWith(`/${locale}/`)
         ? callbackUrl
-        : `/${locale}/dashboard`;
+        : defaultTarget;
 
     router.push(target);
     router.refresh();

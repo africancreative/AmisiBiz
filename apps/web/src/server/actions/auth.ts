@@ -59,7 +59,7 @@ async function setSessionCookie(userId: string, sessionVersion: number) {
  */
 export async function loginAction(
   rawInput: unknown,
-): Promise<ActionResult<{ userId: string }>> {
+): Promise<ActionResult<{ userId: string; platformRole?: string | null }>> {
   const ip = (await getClientIp()) ?? "unknown";
 
   const allowed = await enforceAuthRateLimit("login", 10, MINUTE_MS);
@@ -106,6 +106,7 @@ export async function loginAction(
       status: true,
       sessionVersion: true,
       passwordHash: true,
+      platformRole: true,
     },
   });
 
@@ -146,7 +147,10 @@ export async function loginAction(
     ipAddress: ip,
   });
 
-  return { success: true, data: { userId: user.id } };
+  return {
+    success: true,
+    data: { userId: user.id, platformRole: user.platformRole },
+  };
 }
 
 /**
