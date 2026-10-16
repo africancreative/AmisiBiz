@@ -4,10 +4,8 @@ import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import {
   bootstrapScope,
-  enterScope,
   prisma,
   runInScope,
-  sessionScope,
 } from "@amisibiz/database";
 import {
   registerSchema,
@@ -16,7 +14,6 @@ import {
   updatePasswordSchema,
 } from "@/lib/validations/auth";
 import { maskEmail } from "@/lib/utils";
-import { revokeUserSessions } from "@/lib/auth/session";
 import { getSessionUser } from "@/lib/auth/session-user";
 import { findUserIdByEmail } from "@/lib/auth/user-lookup";
 import {
