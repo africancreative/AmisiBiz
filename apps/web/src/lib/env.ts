@@ -50,3 +50,18 @@ export function getAppName(): string {
 export function emailVerificationRequired(): boolean {
   return process.env.REQUIRE_EMAIL_VERIFICATION === "true";
 }
+
+/** Secret used for signing session cookies and tokens. */
+export function getAuthSecret(): string {
+  const explicit = process.env.AUTH_SECRET?.trim();
+  if (explicit) return explicit;
+
+  // Fallbacks on hosted platforms where database credentials exist
+  const fallback =
+    process.env.NEON_REALTIME_SECRET?.trim() ||
+    process.env.POSTGRES_PASSWORD?.trim() ||
+    process.env.PGPASSWORD?.trim();
+  if (fallback) return fallback;
+
+  return "amisibiz-development-secret-min-32-chars-long";
+}

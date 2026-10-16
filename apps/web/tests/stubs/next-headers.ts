@@ -1,15 +1,28 @@
 /**
  * Stub for `next/headers` under Vitest.
- *
- * `cookies()` requires a live Next.js request scope that unit tests do not
- * have — throw loudly if anything calls it without an explicit module mock.
- * `headers()` returns an empty Headers, matching the inline mock used by
- * action tests.
  */
-export function cookies(): never {
-  throw new Error(
-    "next/headers cookies() is not available in unit tests — mock the calling module instead",
-  );
+
+const cookieStoreMap = new Map<string, { value: string; options?: unknown }>();
+
+export function cookies() {
+  return {
+    get(name: string) {
+      const entry = cookieStoreMap.get(name);
+      return entry ? { name, value: entry.value } : undefined;
+    },
+    set(name: string, value: string, options?: unknown) {
+      cookieStoreMap.set(name, { value, options });
+    },
+    delete(name: string) {
+      cookieStoreMap.delete(name);
+    },
+    getAll() {
+      return Array.from(cookieStoreMap.entries()).map(([name, entry]) => ({
+        name,
+        value: entry.value,
+      }));
+    },
+  };
 }
 
 export function headers(): Headers {

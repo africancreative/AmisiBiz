@@ -943,10 +943,9 @@ model User {
   // tenant business data access on their own.
   platformRole   PlatformRole?
   status         UserStatus    @default(ACTIVE)
-  // Incremented to revoke every existing Supabase session for this user
-  // (password change, forced logout, membership/role compromise). The current
-  // value is mirrored into the access token's app_metadata claim; a session is
-  // valid only while the two match.
+  passwordHash   String?
+  // Monotonic revocation version. A session token is valid only while its
+  // embedded version matches this column.
   sessionVersion Int           @default(0)
 
   createdAt DateTime @default(now())

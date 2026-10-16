@@ -1,28 +1,14 @@
 import "server-only";
 
-import { createClient } from "@supabase/supabase-js";
-import { getSupabasePublishableKey, getSupabaseUrl } from "@/lib/supabase/env";
 import {
-  resolveVerifiedSession,
-  type AppSessionUser,
-} from "@/lib/auth/session-user";
-
-/**
- * Session resolution for installed shells (Capacitor Android, Tauri Windows),
- * which cannot carry the web app's auth cookie and instead send
- * `Authorization: Bearer <user access token>`.
- *
- * This is not a second trust chain. Step 1 differs — the token arrives as a
- * header rather than a cookie, so it is verified with `getUser(token)` instead
- * of `getUser()` — and steps 2-3 are the *same function* the cookie path uses
- * (`resolveVerifiedSession`), which is also the function that opens the RLS
- * scope. A caller holding a token that GoTrue accepts but whose
- * `amisibiz_session_version` claim is stale is refused here exactly as they are
- * on the web.
- *
- * The publishable ("anon") key is used, never the secret key: this client
- * carries only the caller's own token.
- */
+  prisma,
+  enterScope,
+  bootstrapScope,
+  sessionScope,
+} from "@amisibiz/database";
+import { isSessionValid } from "@/lib/auth/session";
+import { verifySessionToken } from "@/lib/auth/token";
+import type { AppSessionUser } from "@/lib/auth/session-user";
 
 /** Extracts the token from `Authorization: Bearer …`, or null. */
 export function readBearerToken(request: Request): string | null {
@@ -34,8 +20,7 @@ export function readBearerToken(request: Request): string | null {
 }
 
 /**
- * Resolves the caller's session from the request's bearer token, or null when
- * the header is absent, malformed, or the token does not survive verification.
+ * Resolves the caller's session from the request's bearer token.
  */
 export async function getBearerSessionUser(
   request: Request,
@@ -43,16 +28,40 @@ export async function getBearerSessionUser(
   const token = readBearerToken(request);
   if (!token) return null;
 
-  const supabase = createClient(getSupabaseUrl(), getSupabasePublishableKey(), {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
+  const payload = await verifySessionToken(token);
+  if (!payload) return null;
+
+  enterScope(sessionScope(payload.userId));
+
+  const user = await prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      platformRole: true,
+      status: true,
+      sessionVersion: true,
     },
   });
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user) return null;
+  if (!user || !isSessionValid(user, payload.sessionVersion)) {
+    enterScope(bootstrapScope());
+    return null;
+  }
 
-  return resolveVerifiedSession(data.user, token);
+  enterScope(
+    sessionScope(user.id, {
+      isPlatformAdmin: user.platformRole === "SUPER_ADMIN",
+      isPlatformSupport: user.platformRole === "SUPPORT",
+    }),
+  );
+
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    platformRole: user.platformRole,
+    status: user.status,
+  };
 }
