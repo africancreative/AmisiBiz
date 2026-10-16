@@ -131,6 +131,7 @@ model Tenant {
   activatedBy          User?                    @relation("TenantActivatedBy", fields: [activatedById], references: [id], onDelete: SetNull)
   suspendedBy          User?                    @relation("TenantSuspendedBy", fields: [suspendedById], references: [id], onDelete: SetNull)
   plan                 Plan?                    @relation("TenantPlan", fields: [planId], references: [id], onDelete: SetNull)
+  subscriptions        Subscription[]           @relation("SubscriptionTenant")
   members              TenantMember[]
   invitations          Invitation[]
   auditLogs            AuditLog[]
@@ -185,6 +186,7 @@ model Plan {
 
   // Relation is kept for catalogue lookup; active subscription is on the Tenant
   tenants Tenant[] @relation("TenantPlan")
+  subscriptions Subscription[] @relation("SubscriptionPlan")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -219,8 +221,9 @@ model Subscription {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  plan Plan @relation(fields: [planId], references: [id], onDelete: SetNull)
+  tenant Tenant @relation("SubscriptionTenant", fields: [tenantId], references: [id], onDelete: Cascade)
+  plan Plan @relation("SubscriptionPlan", fields: [planId], references: [id], onDelete: SetNull)
+  statusHistory SubscriptionStatusHistory[] @relation("SubscriptionStatusHistory")
 
   @@unique([tenantId])
   @@index([status])
@@ -244,7 +247,7 @@ model SubscriptionStatusHistory {
   reason       String?       // Business justification — optional but recommended
   createdAt  DateTime      @default(now())
 
-  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscription Subscription @relation("SubscriptionStatusHistory", fields: [subscriptionId], references: [id], onDelete: Cascade)
 
   @@index([subscriptionId])
   @@index([createdAt])
