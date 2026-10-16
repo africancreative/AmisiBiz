@@ -1,0 +1,2 @@
+-- Phase 11: Branding provider config
+-- Applied via schema sync

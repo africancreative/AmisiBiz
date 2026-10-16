@@ -1,0 +1,2 @@
+-- Phase 10: Audit log integrity
+-- Applied via schema sync

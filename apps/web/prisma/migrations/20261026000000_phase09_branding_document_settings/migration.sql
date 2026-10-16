@@ -1,0 +1,2 @@
+-- Phase 09: Branding and document settings
+-- Applied via schema sync

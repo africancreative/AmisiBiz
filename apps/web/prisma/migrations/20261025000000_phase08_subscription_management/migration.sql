@@ -1,0 +1,2 @@
+-- Phase 08: Subscription management
+-- Applied via schema sync

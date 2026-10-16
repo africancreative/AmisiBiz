@@ -1,0 +1,2 @@
+-- Phase 07: Admin auth and RBAC foundation
+-- Applied via schema sync
