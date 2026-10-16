@@ -4,8 +4,10 @@ import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import {
   bootstrapScope,
+  enterScope,
   prisma,
   runInScope,
+  sessionScope,
 } from "@amisibiz/database";
 import {
   registerSchema,
@@ -45,9 +47,13 @@ async function enforceAuthRateLimit(
 async function setSessionCookie(
   userId: string,
   sessionVersion: number,
-  platformRole?: string | null,
+  platformRole?: string | null | undefined,
 ) {
-  const token = await createSessionToken({ userId, sessionVersion, platformRole });
+  const token = await createSessionToken({
+    userId,
+    sessionVersion,
+    platformRole: platformRole ?? null,
+  });
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
@@ -102,6 +108,9 @@ export async function loginAction(
     };
   }
 
+  // Open pre-auth database scope for credential lookup
+  enterScope(bootstrapScope());
+
   // Look up user directly in Neon PostgreSQL
   const user = await prisma.user.findUnique({
     where: { email: email.toLowerCase() },
@@ -139,6 +148,14 @@ export async function loginAction(
     });
     return { success: false, error: "Invalid email or password." };
   }
+
+  // Upgrade the request context to authenticated session scope
+  enterScope(
+    sessionScope(user.id, {
+      isPlatformAdmin: user.platformRole === "SUPER_ADMIN",
+      isPlatformSupport: user.platformRole === "SUPPORT",
+    }),
+  );
 
   // Set the authenticated session cookie
   await setSessionCookie(user.id, user.sessionVersion, user.platformRole);
