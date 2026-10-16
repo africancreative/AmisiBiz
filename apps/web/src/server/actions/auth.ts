@@ -42,8 +42,12 @@ async function enforceAuthRateLimit(
   return result.success;
 }
 
-async function setSessionCookie(userId: string, sessionVersion: number) {
-  const token = await createSessionToken({ userId, sessionVersion });
+async function setSessionCookie(
+  userId: string,
+  sessionVersion: number,
+  platformRole?: string | null,
+) {
+  const token = await createSessionToken({ userId, sessionVersion, platformRole });
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
@@ -137,7 +141,7 @@ export async function loginAction(
   }
 
   // Set the authenticated session cookie
-  await setSessionCookie(user.id, user.sessionVersion);
+  await setSessionCookie(user.id, user.sessionVersion, user.platformRole);
 
   await recordAudit({
     action: AUDIT_ACTIONS.AUTH_SIGN_IN,

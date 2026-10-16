@@ -199,6 +199,16 @@ export async function rateLimit(
   key: string,
   options: RateLimitOptions,
 ): Promise<RateLimitResult> {
+  // In development, do not lock out developers/administrators while testing
+  if (process.env.NODE_ENV !== "production" && process.env.ENABLE_DEV_RATE_LIMIT !== "true") {
+    return {
+      success: true,
+      limit: options.limit,
+      remaining: options.limit,
+      resetAt: Date.now() + options.windowMs,
+    };
+  }
+
   const store = await getRedisStore();
 
   if (store) {

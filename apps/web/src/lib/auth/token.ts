@@ -6,6 +6,7 @@ export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7; // 7 days
 export type SessionPayload = {
   userId: string;
   sessionVersion: number;
+  platformRole?: string | null;
 };
 
 async function getHmacKey(secret: string): Promise<CryptoKey> {
@@ -60,6 +61,7 @@ export async function verifySessionToken(
     const payload = JSON.parse(json) as {
       userId: string;
       sessionVersion: number;
+      platformRole?: string | null;
       exp: number;
     };
 
@@ -72,6 +74,7 @@ export async function verifySessionToken(
     return {
       userId: payload.userId,
       sessionVersion: payload.sessionVersion,
+      ...(payload.platformRole !== undefined ? { platformRole: payload.platformRole } : {}),
     };
   } catch {
     return null;

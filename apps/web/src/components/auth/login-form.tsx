@@ -25,30 +25,37 @@ export function LoginForm({ locale }: { locale: string }) {
     setPending(true);
     setError(null);
 
-    // Credentials go straight to the server action — the browser never holds
-    // a Supabase client or session token (cookies are httpOnly).
-    const result = await loginAction({ email, password });
+    try {
+      // Credentials go straight to the server action — the browser never holds
+      // a Supabase client or session token (cookies are httpOnly).
+      const result = await loginAction({ email, password });
 
-    if (!result.success) {
-      setError(result.error || t("error.generic"));
+      if (!result.success) {
+        setError(result.error || t("error.generic"));
+        setPending(false);
+        return;
+      }
+
+      // Only honour callback URLs that stay within this locale's routes to
+      // prevent open-redirect abuse.
+      const callbackUrl = searchParams.get("callbackUrl");
+      const defaultTarget =
+        result.data?.platformRole === "SUPER_ADMIN"
+          ? `/${locale}/admin`
+          : `/${locale}/dashboard`;
+      const target =
+        callbackUrl && callbackUrl.startsWith(`/${locale}/`)
+          ? callbackUrl
+          : defaultTarget;
+
+      // Force top-level document navigation so that all server components,
+      // middleware and cookies initialize fresh without router cache conflicts.
+      window.location.assign(target);
+    } catch (err) {
+      console.error("[login] Submission error:", err);
+      setError(t("error.generic"));
       setPending(false);
-      return;
     }
-
-    // Only honour callback URLs that stay within this locale's routes to
-    // prevent open-redirect abuse.
-    const callbackUrl = searchParams.get("callbackUrl");
-    const defaultTarget =
-      result.data?.platformRole === "SUPER_ADMIN"
-        ? `/${locale}/admin`
-        : `/${locale}/dashboard`;
-    const target =
-      callbackUrl && callbackUrl.startsWith(`/${locale}/`)
-        ? callbackUrl
-        : defaultTarget;
-
-    router.push(target);
-    router.refresh();
   }
 
   return (

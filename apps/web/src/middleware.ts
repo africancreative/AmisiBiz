@@ -100,13 +100,16 @@ export default async function middleware(request: NextRequest) {
 
   // Database session check via signed HTTP-only cookie
   let userId: string | null = null;
+  let platformRole: string | null = null;
   const sessionCookie = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (sessionCookie) {
     try {
       const payload = await verifySessionToken(sessionCookie);
       userId = payload?.userId ?? null;
+      platformRole = payload?.platformRole ?? null;
     } catch {
       userId = null;
+      platformRole = null;
     }
   }
 
@@ -123,7 +126,11 @@ export default async function middleware(request: NextRequest) {
   }
 
   if (isAuthOnlyRoute(pathname) && userId) {
-    return NextResponse.redirect(new URL(`/${locale}/dashboard`, request.url));
+    const destination =
+      platformRole === "SUPER_ADMIN"
+        ? `/${locale}/admin`
+        : `/${locale}/dashboard`;
+    return NextResponse.redirect(new URL(destination, request.url));
   }
 
   return i18nResponse;

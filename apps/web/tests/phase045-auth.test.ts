@@ -38,6 +38,16 @@ describe("Session Token (Web Crypto HMAC)", () => {
     });
   });
 
+  it("creates and preserves platformRole in session token", async () => {
+    const token = await createSessionToken({
+      userId: USER_ID,
+      sessionVersion: 1,
+      platformRole: "SUPER_ADMIN",
+    });
+    const payload = await verifySessionToken(token);
+    expect(payload?.platformRole).toBe("SUPER_ADMIN");
+  });
+
   it("rejects an invalid signature or tampered token", async () => {
     const token = await createSessionToken({
       userId: USER_ID,
