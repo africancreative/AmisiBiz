@@ -51,7 +51,7 @@ import {
  */
 
 type PushParams = {
-  userId: string;
+  _userId: string;
   tenantId: string;
   envelope: SyncPushEnvelope;
 };
@@ -59,7 +59,7 @@ type PushParams = {
 type BatchRefusal = { code: string; message: string };
 
 export async function handleSyncPush({
-  userId,
+  _userId,
   tenantId,
   envelope,
 }: PushParams): Promise<SyncPushResult> {
@@ -84,7 +84,7 @@ export async function handleSyncPush({
   // ── The workspace-level gate ───────────────────────────────────────────────
   let refusal: BatchRefusal | null = null;
   try {
-    const context = await resolveTenantContext(userId, tenantId);
+    const context = await resolveTenantContext(_userId, tenantId);
     await assertWritableContext(context);
   } catch (err) {
     refusal = describeBatchRefusal(err);
@@ -100,7 +100,7 @@ export async function handleSyncPush({
   for (const operation of operations) {
     outcomes.push({
       operationId: operation.id,
-      outcome: await applyOperation({ clientId, userId, tenantId, operation }),
+      outcome: await applyOperation({ clientId, _userId, tenantId, operation }),
     });
   }
 
@@ -110,12 +110,12 @@ export async function handleSyncPush({
 
 async function applyOperation({
   clientId,
-  userId,
+  _userId,
   tenantId,
   operation,
 }: {
   clientId: string;
-  userId: string;
+  _userId: string;
   tenantId: string;
   operation: SyncOperationInput;
 }): Promise<SyncPushOutcome> {
@@ -133,14 +133,14 @@ async function applyOperation({
   });
   if (receipt) return replayOutcome(receipt);
 
-  const outcome = await resolveOutcome({ userId, tenantId, operation });
+  const outcome = await resolveOutcome({ _userId, tenantId, operation });
 
   await prisma.syncOperation.create({
     data: {
       clientId,
       operationId: operation.id,
       tenantId,
-      userId,
+      _userId,
       entity: operation.entity,
       entityId: operation.entityId,
       outcome: outcome.status,
@@ -158,11 +158,11 @@ async function applyOperation({
 
 /** Works out the outcome of an operation that has no receipt yet. */
 async function resolveOutcome({
-  userId,
+  _userId,
   tenantId,
   operation,
 }: {
-  userId: string;
+  _userId: string;
   tenantId: string;
   operation: SyncOperationInput;
 }): Promise<SyncPushOutcome> {

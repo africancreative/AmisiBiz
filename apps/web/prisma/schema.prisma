@@ -292,6 +292,7 @@ model TenantBranding {
   taxPin              String? // Tax identification number
   currency            String   @default("KES") // ISO 4217 currency code
   defaultFooter       String? // Default footer text on documents
+  paymentInstructions String? // Bank details / M-Pesa / payment terms shown on documents
   documentLayout      String   @default("standard") // Document layout model
   
   // Invoice template settings
@@ -1028,7 +1029,8 @@ model AuditLog {
   action            String // e.g. "tenant.created", "user.invited", "invoice.approved"
   resource          String? // e.g. "Invoice", "User"
   resourceType      String? // e.g. "tenant", "user", "plan", "branding"
-  outcome           String // e.g. "success", "failed", "denied"
+  resourceId        String? // ID of the affected record (polymorphic — intentionally not an FK)
+  outcome           String? // e.g. "success", "failed", "denied"
   outcomeDetails    String? // Free-form summary of outcome
   correlationId     String? // Request ID or correlation identifier for tracking
   metadata          Json?   // Additional context (sanitised, no PII unless required)

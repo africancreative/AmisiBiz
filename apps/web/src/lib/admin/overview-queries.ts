@@ -60,7 +60,7 @@ export async function getTenantOverviewCounts(): Promise<TenantOverviewCounts> {
   await openPlatformReadScope();
 
   const grouped = await prisma.tenant.groupBy({
-    by: ["status"],
+    by: ["status", "planId"],
     _count: { _all: true },
   });
 
