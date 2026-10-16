@@ -16,8 +16,20 @@
  * production origin (wrong absolute links break auth emails and metadata).
  */
 export function getAppUrlOrNull(): string | null {
-  const raw = process.env.NEXT_PUBLIC_APP_URL?.trim();
-  if (raw) return raw.replace(/\/+$/, "");
+  const explicit = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+
+  const vercel =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim() ||
+    process.env.VERCEL_URL?.trim();
+  if (vercel) {
+    const prefixed =
+      vercel.startsWith("http://") || vercel.startsWith("https://")
+        ? vercel
+        : `https://${vercel}`;
+    return prefixed.replace(/\/+$/, "");
+  }
+
   if (process.env.NODE_ENV === "production") {
     throw new Error(
       "NEXT_PUBLIC_APP_URL is not configured. Set it to the deployed origin (e.g. https://app.amisigenuine.com) — production never guesses its own origin.",
