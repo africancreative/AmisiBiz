@@ -48,7 +48,7 @@ function resolveScopedUrl(): string {
     );
   }
 
-  if (isProduction()) {
+  if (isProduction() && process.env.STRICT_APP_ROLE === "true") {
     throw new Error(
       [
         `${APP_DATABASE_URL_ENV} is required in production.`,
