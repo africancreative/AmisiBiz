@@ -399,6 +399,7 @@ export function TenantBrandingPanel({
         <div className="space-y-2 border-t border-border pt-4">
           <p className="label">{t("logo")}</p>
           {logoUrl ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
             <img
               src={logoUrl}
               alt=""

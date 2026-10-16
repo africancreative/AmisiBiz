@@ -101,6 +101,12 @@ export type EtimsReconciliationEvent = {
   readonly recordedAt: string;
 };
 
+export type EtimsLabel =
+  | "recognized"
+  | "rejected"
+  | "pending"
+  | "not_submitted";
+
 export function etimsLabel(
   outcome: IntegrationOutcome<EtimsConfirmation>,
 ): EtimsLabel {

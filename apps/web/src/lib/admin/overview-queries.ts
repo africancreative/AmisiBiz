@@ -2,13 +2,7 @@ import { prisma } from "@amisibiz/database";
 import { getSessionUser } from "@/lib/auth/session-user";
 import { authorizePlatform } from "@/server/auth/authorization";
 import { PERMISSIONS, type Permission } from "@amisibiz/auth";
-import type {
-  DocumentPeriodStyle,
-  DocumentType,
-  PlanStatus,
-  Prisma,
-  TenantStatus,
-} from "@prisma/client";
+import type { TenantStatus } from "@prisma/client";
 
 /**
  * Opens the platform read scope for the signed-in administrator.

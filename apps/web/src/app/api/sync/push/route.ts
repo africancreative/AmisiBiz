@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/session-user";
-import { z } from "zod";
 import { handleSyncPush } from "@/server/sync/push";
 import { syncPushEnvelopeSchema } from "@/lib/validations/sync";
-import { AUDIT_ACTIONS } from "@/lib/audit";
 
 export async function POST(request: Request) {
   const json = await request.json();
