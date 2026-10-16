@@ -1,67 +1,79 @@
 import { z } from "zod";
 
 /**
- * Server-side environment for the database connection (Neon PostgreSQL).
+ * Server-side environment for the database and Supabase clients.
  *
  * Access is intentionally LAZY — functions, never module-load validation —
  * so importing this module is always safe (including from tests that mock it
  * partially) and every failure names the exact variable that is missing or
- * invalid.
+ * invalid. `NEXT_PUBLIC_*` values are browser-safe by design;
+ * `SUPABASE_SECRET_KEY` is a server-only credential that must never be
+ * referenced from a client bundle.
  */
 
-export const databaseEnvSchema = z.object({
-  DATABASE_URL: z
+export const supabaseEnvSchema = z.object({
+  NEXT_PUBLIC_SUPABASE_URL: z
     .string()
     .trim()
-    .min(1, "is required (PostgreSQL connection URL)")
-    .url("must be a valid PostgreSQL connection URL"),
-  DIRECT_URL: z
+    .min(1, "is required (Supabase project URL)")
+    .url("must be a valid URL, e.g. https://<ref>.supabase.co"),
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z
     .string()
     .trim()
-    .url("must be a valid PostgreSQL connection URL")
-    .optional(),
-  APP_DATABASE_URL: z
+    .min(1, "is required (browser-safe publishable key)"),
+  SUPABASE_SECRET_KEY: z
     .string()
     .trim()
-    .url("must be a valid PostgreSQL connection URL")
-    .optional(),
+    .min(
+      1,
+      "is required (server-only secret key — never expose it to clients)",
+    ),
 });
 
-export type DatabaseEnv = z.infer<typeof databaseEnvSchema>;
+export type SupabaseEnv = z.infer<typeof supabaseEnvSchema>;
 
 /**
- * Every problem found in the database environment, aggregated so a
+ * Every problem found in the Supabase environment, aggregated so a
  * misconfigured deployment reports all missing/invalid variables at once
  * instead of failing on the first one touched.
  */
-export function collectDatabaseEnvProblems(
+export function collectSupabaseEnvProblems(
   env: Record<string, string | undefined> = process.env,
 ): string[] {
-  const parsed = databaseEnvSchema.safeParse(env);
+  const parsed = supabaseEnvSchema.safeParse(env);
   if (parsed.success) return [];
   return parsed.error.issues.map(
     (issue) => `${issue.path.join(".")}: ${issue.message}`,
   );
 }
 
-/** Throws a single aggregated error when the database environment is not valid. */
-export function requireDatabaseEnv(
+/** Throws a single aggregated error when the Supabase environment is not valid. */
+export function requireSupabaseEnv(
   env: Record<string, string | undefined> = process.env,
-): DatabaseEnv {
-  const problems = collectDatabaseEnvProblems(env);
+): SupabaseEnv {
+  const problems = collectSupabaseEnvProblems(env);
   if (problems.length > 0) {
     throw new Error(
       [
-        "Database environment is not configured correctly:",
+        "Supabase environment is not configured correctly:",
         ...problems.map((problem) => `  - ${problem}`),
-        "See apps/web/.env.example for the full list of required variables.",
+        "See .env.example for the full list of required variables.",
       ].join("\n"),
     );
   }
-  return databaseEnvSchema.parse(env);
+  return supabaseEnvSchema.parse(env);
 }
 
-function requireVar(name: string, value: string | undefined): string {
+export function isSupabaseConfigured(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return Boolean(
+    env.NEXT_PUBLIC_SUPABASE_URL?.trim() &&
+      env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim(),
+  );
+}
+
+function require(name: string, value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     throw new Error(
@@ -71,14 +83,16 @@ function requireVar(name: string, value: string | undefined): string {
   return trimmed;
 }
 
-export function getDatabaseUrl(): string {
-  return requireVar("DATABASE_URL", process.env.DATABASE_URL);
+export function getSupabaseUrl(): string {
+  return require("NEXT_PUBLIC_SUPABASE_URL", process.env
+    .NEXT_PUBLIC_SUPABASE_URL);
 }
 
-export function getDirectUrl(): string | undefined {
-  return process.env.DIRECT_URL?.trim();
+export function getSupabasePublishableKey(): string {
+  return require("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", process.env
+    .NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
 }
 
-export function getAppDatabaseUrl(): string | undefined {
-  return process.env.APP_DATABASE_URL?.trim();
+export function getSupabaseSecretKey(): string {
+  return require("SUPABASE_SECRET_KEY", process.env.SUPABASE_SECRET_KEY);
 }
