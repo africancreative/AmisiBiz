@@ -117,7 +117,7 @@ export function extractSubdomain(hostname: string): string | null {
   }
   // Try a more generic approach - find the part before the first dot
   const parts = hostname.split(".");
-  if (parts.length >= 2) {
+  if (parts.length >= 2 && parts[0]) {
     const potential = parts[0].toLowerCase();
     if (validateSubdomain(potential)) {
       return potential;
