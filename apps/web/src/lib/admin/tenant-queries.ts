@@ -243,9 +243,7 @@ export async function getRecentAdminActivity(
  * than showing a zero that would read as a measured "none".
  */
 export type OperationalWarningKey =
-  | "syncRefusals"
-  | "suspended"
-  | "awaitingOwner";
+  "syncRefusals" | "suspended" | "awaitingOwner";
 
 export type OperationalWarning = {
   key: OperationalWarningKey;

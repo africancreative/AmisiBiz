@@ -24,7 +24,11 @@ import {
   createSessionToken,
 } from "@/lib/auth/token";
 import { appendAuditLog, recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
-import { rateLimit, resetRateLimit, getClientIp } from "@/lib/security/rate-limit";
+import {
+  rateLimit,
+  resetRateLimit,
+  getClientIp,
+} from "@/lib/security/rate-limit";
 import {
   provisionTenant,
   recordTenantCreated,

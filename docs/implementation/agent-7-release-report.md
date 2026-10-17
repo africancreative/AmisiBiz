@@ -8,18 +8,18 @@ trusted and are contradicted in at least one place (§3 C1).
 
 ## 1. Commands actually executed
 
-| Command | Result |
-| --- | --- |
-| `pnpm type-check` | **PASS** — 10/10 workspaces |
-| `pnpm lint` | **PASS** — 0 errors, 2 warnings (unused vars: `portal/layout.tsx:4`, `login-form.tsx:11`) |
-| `pnpm test:run` | **PASS 538 / 0 failed / 33 skipped** — the 33 skipped are `tests/integration-security.test.ts`, which requires `TEST_DATABASE_URL` (see §3) |
-| `pnpm format:check` | **FAIL** — `apps/web/src/lib/admin/tenant-queries.ts`, `apps/web/src/server/actions/auth.ts` (both committed in `8cd1d4b` unformatted) |
-| `pnpm build` | **PASS** — compiled, 70 static pages generated |
-| `pnpm check:bundles` | **PASS** — 246 files / 5.4 MB scanned, no secret material in any client/server bundle |
-| `pnpm audit --prod` | **7 findings: 3 high, 4 moderate** — all transitive; see §3 M3/L1 |
-| `prisma migrate deploy` (fresh DB, throwaway cluster) | **Reports success — 21/21 applied** — but the built schema is wrong; see §3 C1 |
-| `prisma migrate diff` (migrations-built DB vs `schema.prisma`) | **Drift confirmed**, 86-line delta; evidence attached as `agent-7-schema-drift.sql` |
-| `vitest run tests/integration-security.test.ts` (real DB) | **3 failed / 30 passed** on a drift-patched throwaway DB; **cannot run at all on a migrations-built DB** |
+| Command                                                        | Result                                                                                                                                      |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm type-check`                                              | **PASS** — 10/10 workspaces                                                                                                                 |
+| `pnpm lint`                                                    | **PASS** — 0 errors, 2 warnings (unused vars: `portal/layout.tsx:4`, `login-form.tsx:11`)                                                   |
+| `pnpm test:run`                                                | **PASS 538 / 0 failed / 33 skipped** — the 33 skipped are `tests/integration-security.test.ts`, which requires `TEST_DATABASE_URL` (see §3) |
+| `pnpm format:check`                                            | **FAIL** — `apps/web/src/lib/admin/tenant-queries.ts`, `apps/web/src/server/actions/auth.ts` (both committed in `8cd1d4b` unformatted)      |
+| `pnpm build`                                                   | **PASS** — compiled, 70 static pages generated                                                                                              |
+| `pnpm check:bundles`                                           | **PASS** — 246 files / 5.4 MB scanned, no secret material in any client/server bundle                                                       |
+| `pnpm audit --prod`                                            | **7 findings: 3 high, 4 moderate** — all transitive; see §3 M3/L1                                                                           |
+| `prisma migrate deploy` (fresh DB, throwaway cluster)          | **Reports success — 21/21 applied** — but the built schema is wrong; see §3 C1                                                              |
+| `prisma migrate diff` (migrations-built DB vs `schema.prisma`) | **Drift confirmed**, 86-line delta; evidence attached as `agent-7-schema-drift.sql`                                                         |
+| `vitest run tests/integration-security.test.ts` (real DB)      | **3 failed / 30 passed** on a drift-patched throwaway DB; **cannot run at all on a migrations-built DB**                                    |
 
 ## 2. Database verification (throwaway cluster, never a shared DB)
 
@@ -146,13 +146,13 @@ Positive results from execution and source review:
 
 ## 5. Not executed, and why
 
-| Area | Reason |
-| --- | --- |
-| End-to-end functional flows (registration → portal, directive §A) | Requires a working database; migrations cannot produce one (C1). Reproducing the hand-`db push` workaround to demo flows would normalize the anti-pattern the audit exists to catch. |
-| Live-database state (what is actually deployed) | Standing rule: no live probes without the owner's explicit go-ahead. |
-| Email delivery, private storage integration | No email transport and no storage provider exist (AGENT 6 §3.1/3.2). |
+| Area                                                                   | Reason                                                                                                                                                                                   |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| End-to-end functional flows (registration → portal, directive §A)      | Requires a working database; migrations cannot produce one (C1). Reproducing the hand-`db push` workaround to demo flows would normalize the anti-pattern the audit exists to catch.     |
+| Live-database state (what is actually deployed)                        | Standing rule: no live probes without the owner's explicit go-ahead.                                                                                                                     |
+| Email delivery, private storage integration                            | No email transport and no storage provider exist (AGENT 6 §3.1/3.2).                                                                                                                     |
 | Performance/load, concurrency proof of numbering under real contention | No load environment; the numbering guarantee is enforced in-DB (`SELECT … FOR UPDATE` + unique index) and unit-tested for composition, but concurrent allocation was not exercised here. |
-| E2E suites | None exist in the repo. |
+| E2E suites                                                             | None exist in the repo.                                                                                                                                                                  |
 
 ## 6. Recommendation: **NO-GO**
 
