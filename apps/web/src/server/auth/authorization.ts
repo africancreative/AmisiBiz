@@ -133,7 +133,7 @@ async function resolvePlatformClaims(userId: string): Promise<{
 
 /**
  * Guards against acting as somebody else. `getSessionUser()` opens the request
- * scope from the verified Supabase token; every authorization call must name the
+ * scope from the verified session token; every authorization call must name the
  * same user. A mismatch means the caller passed an identity that never went
  * through the trust chain, so the request is refused before any data is read.
  */

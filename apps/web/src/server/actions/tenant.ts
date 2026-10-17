@@ -10,6 +10,7 @@ import {
   updateTenantSchema,
   inviteMemberSchema,
   updateMemberRoleSchema,
+  revokeInvitationSchema,
 } from "@/lib/validations/tenant";
 import { addDays } from "date-fns";
 import { randomBytes } from "crypto";
@@ -380,9 +381,20 @@ export async function acceptInvitationAction(
   }
 
   if (new Date() > invitation.expiresAt) {
+    // Expiry is a lifecycle fact: flip the row and leave the same kind of
+    // evidence an acceptance would. Without this the only record that an
+    // invitation ever existed and lapsed would be its absence from ACCEPTED.
     await prisma.invitation.update({
       where: { id: invitation.id },
       data: { status: "EXPIRED" },
+    });
+    await recordAudit({
+      action: AUDIT_ACTIONS.TENANT_INVITATION_EXPIRED,
+      userId: session.user.id,
+      tenantId: invitation.tenantId,
+      resource: "Invitation",
+      resourceId: invitation.id,
+      metadata: { email: invitation.email },
     });
     return { success: false, error: "This invitation has expired." };
   }
@@ -428,5 +440,79 @@ export async function acceptInvitationAction(
   } catch (err) {
     console.error("[acceptInvitationAction]", err);
     return { success: false, error: "Failed to accept invitation." };
+  }
+}
+
+/**
+ * Server Action: Revoke a pending member invitation.
+ *
+ * Requires `business.members.manage`. The invitation is addressed by id but is
+ * still scoped to the actor's tenant — a caller cannot revoke an invitation that
+ * belongs to a workspace they were not authorized for, and an invitation that is
+ * no longer PENDING (already accepted, expired or revoked) cannot be revoked.
+ *
+ * This is the counterpart to `inviteMemberAction`'s upsert: reissuing refreshes
+ * the token and expiry, revoking retires it, and both leave an audit row so the
+ * brief's "issuance, acceptance, expiry and revocation" are all evidenced.
+ */
+export async function revokeInvitationAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const result = revokeInvitationSchema.safeParse(rawInput);
+  if (!result.success) {
+    return { success: false, error: "Invalid invitation reference." };
+  }
+
+  const { tenantId, invitationId } = result.data;
+
+  try {
+    await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.BUSINESS_MEMBERS_MANAGE,
+    );
+  } catch (err) {
+    return authzError(err);
+  }
+
+  const invitation = await prisma.invitation.findUnique({
+    where: { id: invitationId },
+    select: { id: true, tenantId: true, email: true, status: true },
+  });
+
+  // A missing row and a row belonging to another tenant read the same, so the
+  // refusal never confirms that an invitation exists elsewhere.
+  if (!invitation || invitation.tenantId !== tenantId) {
+    return { success: false, error: "Invitation not found." };
+  }
+
+  if (invitation.status !== "PENDING") {
+    return {
+      success: false,
+      error: "Only a pending invitation can be revoked.",
+    };
+  }
+
+  try {
+    await prisma.invitation.update({
+      where: { id: invitation.id },
+      data: { status: "REVOKED" },
+    });
+
+    await recordAudit({
+      action: AUDIT_ACTIONS.TENANT_INVITATION_REVOKED,
+      userId: session.user.id,
+      tenantId,
+      resource: "Invitation",
+      resourceId: invitation.id,
+      metadata: { email: invitation.email },
+    });
+
+    return { success: true };
+  } catch (err) {
+    console.error("[revokeInvitationAction]", err);
+    return { success: false, error: "Failed to revoke invitation." };
   }
 }

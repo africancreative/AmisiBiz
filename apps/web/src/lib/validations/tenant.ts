@@ -99,7 +99,18 @@ export const updateMemberRoleSchema = z.object({
   tenantId: z.string().uuid("Invalid tenant ID"),
 });
 
+// Revoking a pending invitation. The invitation is addressed by id and scoped to
+// the tenant, so a caller cannot revoke an invitation belonging to a workspace
+// they were not authorized for. A reason is optional here (unlike a lifecycle
+// transition): a withdrawn invite is routine member management, and the audit
+// row already records who did it and to which address.
+export const revokeInvitationSchema = z.object({
+  tenantId: z.string().uuid("Invalid tenant ID"),
+  invitationId: z.string().uuid("Invalid invitation ID"),
+});
+
 export type CreateTenantInput = z.infer<typeof createTenantSchema>;
 export type UpdateTenantInput = z.infer<typeof updateTenantSchema>;
 export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
 export type UpdateMemberRoleInput = z.infer<typeof updateMemberRoleSchema>;
+export type RevokeInvitationInput = z.infer<typeof revokeInvitationSchema>;

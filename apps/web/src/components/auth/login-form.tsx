@@ -27,7 +27,7 @@ export function LoginForm({ locale }: { locale: string }) {
 
     try {
       // Credentials go straight to the server action — the browser never holds
-      // a Supabase client or session token (cookies are httpOnly).
+      // a session token (cookies are httpOnly).
       const result = await loginAction({ email, password });
 
       if (!result.success) {

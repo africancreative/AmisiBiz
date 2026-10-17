@@ -52,7 +52,9 @@ async function main() {
         status: "ACTIVE",
       },
     });
-    console.log(`[seed] Platform admin converged for ${email} (${existing.id}).`);
+    console.log(
+      `[seed] Platform admin converged for ${email} (${existing.id}).`,
+    );
   } else {
     const created = await prisma.user.create({
       data: {

@@ -1,5 +1,5 @@
 import { roundDecimalString } from "./money";
-import { multiplyDecimalStrings, subtractDecimalStrings } from "./decimal";
+import { calculateLine, type DocumentDiscountType } from "./calculations";
 
 /**
  * Catalogue → document-line snapshot.
@@ -12,7 +12,11 @@ import { multiplyDecimalStrings, subtractDecimalStrings } from "./decimal";
  *
  * This module builds those copied columns as a pure function, so the same rule
  * can be exercised by a Server Action today and by a SQLite-backed offline client
- * later, without either one reaching for the live catalogue at render time.
+ * later, without either one reaching for the live catalogue at render time. The
+ * web server's line resolver calls `resolveCatalogueLineFacts` with rows it read
+ * inside the write transaction; the offline client will call
+ * `buildDocumentLineSnapshot` with rows it synced down. Both paths therefore
+ * agree because they are the same code, not two implementations kept in sync.
  *
  * Amounts are decimal strings and the arithmetic is exact (see `./decimal`).
  */
@@ -63,12 +67,14 @@ export interface DocumentLineSnapshot {
   quantity: string;
   unitPrice: string;
   currency: string;
-  discountType: "PERCENT" | null;
+  discountType: DocumentDiscountType | null;
+  /** The mechanism value: 0–100 when `discountType` is "PERCENT", else 0. */
   discountPercent: string;
+  /** Money actually taken off, which is what the stored column holds. */
   discountAmount: string;
   /** quantity × unitPrice, rounded to 4 dp. */
   lineTotal: string;
-  /** lineTotal × discountPercent / 100, rounded to 4 dp. */
+  /** The discount actually applied, clamped to the line, rounded to 4 dp. */
   lineDiscount: string;
   /** lineTotal − lineDiscount. */
   lineNet: string;
@@ -110,20 +116,109 @@ function isOverrideInForce(
 }
 
 /**
- * Builds the frozen line for a quantity of a catalogue item.
+ * The discount a document line carries in its own right.
  *
- * A customer override is applied only when it exists, is available AND is in
- * force on `asOf`; an unavailable or out-of-window entry deliberately falls back
- * to the catalogue price so a suspended or expired agreement can never be
- * silently charged. The chosen source is reported back in `priceSource`.
+ * A customer agreement that names a discount percentage is the commercial term of
+ * record, so while that agreement is in force the line's own discount is NOT
+ * applied as well — taking two discounts off an agreed price is not a term the
+ * customer agreed to, and adding one silently would be a pricing decision made by
+ * a form field rather than by the business. With no agreed discount (or no
+ * agreement at all) the document's own discount is used exactly as chosen.
  */
-export function buildDocumentLineSnapshot(input: {
+export interface DocumentLineDiscount {
+  discountType: DocumentDiscountType | null;
+  /** 0–100 when `discountType` is "PERCENT"; otherwise 0. */
+  discountPercent: string;
+  /** Major units when `discountType` is "AMOUNT"; otherwise 0. */
+  discountAmount: string;
+}
+
+/** One line's commercial facts, copied and precedence-resolved, sans totals. */
+export interface ResolvedCatalogueLine {
+  /** Provenance only; never read back to price the line. */
+  itemId: string;
+  description: string;
+  itemCode: string | null;
+  unitOfMeasure: string;
+  /** The price actually used — the agreed one when an agreement is in force. */
+  unitPrice: string;
+  currency: string;
+  discountType: DocumentDiscountType | null;
+  discountPercent: string;
+  discountAmount: string;
+  /**
+   * The item's own tax classification, which is what the catalogue says the
+   * customer should be charged. Null when the item carries no rate, in which case
+   * the caller decides (a free-text line has no classification to copy).
+   */
+  taxRateId: string | null;
+  taxName: string | null;
+  taxRate: string;
+  /** Which price was used, recorded so the choice is auditable. */
+  priceSource: "customer" | "catalogue";
+}
+
+/** Applies the discount precedence rule: an agreed discount beats the line's own. */
+function chooseDiscount(
+  override: CustomerCatalogueOverride | null,
+  documentDiscount: DocumentLineDiscount | null | undefined,
+): DocumentLineDiscount {
+  const agreed = override ? round4(override.discountPercent) : "0.0000";
+
+  if (override && agreed !== "0.0000") {
+    return {
+      discountType: "PERCENT",
+      discountPercent: agreed,
+      discountAmount: "0.0000",
+    };
+  }
+
+  const chosen = documentDiscount ?? {
+    discountType: null,
+    discountPercent: "0",
+    discountAmount: "0",
+  };
+
+  if (chosen.discountType === "PERCENT") {
+    return {
+      discountType: "PERCENT",
+      discountPercent: round4(chosen.discountPercent),
+      discountAmount: "0.0000",
+    };
+  }
+  if (chosen.discountType === "AMOUNT") {
+    return {
+      discountType: "AMOUNT",
+      discountPercent: "0.0000",
+      discountAmount: round4(chosen.discountAmount),
+    };
+  }
+  return {
+    discountType: null,
+    discountPercent: "0.0000",
+    discountAmount: "0.0000",
+  };
+}
+
+/**
+ * Decides what one catalogue line is worth, for one customer, on one date.
+ *
+ * This is the single precedence implementation in the product. A customer
+ * override is applied only when it exists, is available AND is in force on
+ * `asOf`; an unavailable or out-of-window entry deliberately falls back to the
+ * catalogue price, so a suspended or expired agreement can never be silently
+ * charged. Every override field is per-field: an agreement that renames the item
+ * but sets no unit still sells in the catalogue's unit. The chosen source is
+ * reported in `priceSource` rather than inferred from the numbers.
+ */
+export function resolveCatalogueLineFacts(input: {
   item: CatalogueItemSource;
   override?: CustomerCatalogueOverride | null;
-  quantity: string;
+  /** The discount on the document line, used only if no agreement dictates one. */
+  documentDiscount?: DocumentLineDiscount | null;
   /** The date the line is written, ISO string. Used to test the validity window. */
   asOf?: string | null;
-}): DocumentLineSnapshot {
+}): ResolvedCatalogueLine {
   const { item } = input;
   const override =
     input.override &&
@@ -132,42 +227,65 @@ export function buildDocumentLineSnapshot(input: {
       ? input.override
       : null;
 
-  const quantity = round4(input.quantity);
-  const unitPrice = round4(override?.agreedPrice ?? item.unitPrice);
-  const discountPercent = override
-    ? round4(override.discountPercent)
-    : "0.0000";
-
-  const lineTotal = round4(multiplyDecimalStrings(quantity, unitPrice));
-
-  // discount = lineTotal × (discountPercent / 100). The division by 100 is a
-  // decimal-point shift, done exactly by multiplying by "0.01".
-  const discountFraction = round4(
-    multiplyDecimalStrings(discountPercent, "0.01"),
-  );
-  const lineDiscount = round4(
-    multiplyDecimalStrings(lineTotal, discountFraction),
-  );
-
-  const lineNet = round4(subtractDecimalStrings(lineTotal, lineDiscount));
-
   return {
     itemId: item.itemId,
-    description: override?.customName || item.name,
+    description: override?.customName?.trim() || item.name,
     itemCode: override?.customCode ?? item.sku,
     unitOfMeasure: override?.customUnitOfMeasure || item.unitOfMeasure,
-    quantity,
-    unitPrice,
+    unitPrice: round4(override?.agreedPrice ?? item.unitPrice),
     currency: item.currency,
-    discountType: override && discountPercent !== "0.0000" ? "PERCENT" : null,
-    discountPercent,
-    discountAmount: lineDiscount,
-    lineTotal,
-    lineDiscount,
-    lineNet,
+    ...chooseDiscount(override, input.documentDiscount),
     taxRateId: item.taxRateId,
     taxName: item.taxName,
     taxRate: item.taxRate,
     priceSource: override ? "customer" : "catalogue",
+  };
+}
+
+/**
+ * Builds the frozen line for a quantity of a catalogue item.
+ *
+ * The facts come from `resolveCatalogueLineFacts` and the totals from
+ * `calculateLine`, so a line priced offline is arithmetically identical to the
+ * same line priced by the server.
+ */
+export function buildDocumentLineSnapshot(input: {
+  item: CatalogueItemSource;
+  override?: CustomerCatalogueOverride | null;
+  quantity: string;
+  documentDiscount?: DocumentLineDiscount | null;
+  asOf?: string | null;
+}): DocumentLineSnapshot {
+  const facts = resolveCatalogueLineFacts(input);
+  const quantity = round4(input.quantity);
+
+  const computed = calculateLine({
+    quantity,
+    unitPrice: facts.unitPrice,
+    discountType: facts.discountType,
+    discountPercent: facts.discountPercent,
+    discountAmount: facts.discountAmount,
+    taxRate: facts.taxRate,
+    taxName: facts.taxName,
+  });
+
+  return {
+    itemId: facts.itemId,
+    description: facts.description,
+    itemCode: facts.itemCode,
+    unitOfMeasure: facts.unitOfMeasure,
+    quantity,
+    unitPrice: facts.unitPrice,
+    currency: facts.currency,
+    discountType: facts.discountType,
+    discountPercent: facts.discountPercent,
+    discountAmount: computed.lineDiscount,
+    lineTotal: computed.lineTotal,
+    lineDiscount: computed.lineDiscount,
+    lineNet: computed.lineNet,
+    taxRateId: facts.taxRateId,
+    taxName: facts.taxName,
+    taxRate: facts.taxRate,
+    priceSource: facts.priceSource,
   };
 }

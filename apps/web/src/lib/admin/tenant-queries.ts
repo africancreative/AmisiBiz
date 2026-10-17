@@ -2,6 +2,7 @@ import { prisma, runInScope } from "@amisibiz/database";
 import { getSessionUser } from "@/lib/auth/session-user";
 import { authorizePlatform } from "@/server/auth/authorization";
 import { PERMISSIONS, type Permission } from "@amisibiz/auth";
+import { AUDIT_ACTIONS } from "@/lib/audit";
 import { tenantSearchSchema } from "@/lib/validations/platform-tenant";
 import type {
   DocumentPeriodStyle,
@@ -106,6 +107,173 @@ export async function getRecentTenantChanges(
         updatedAt: true,
       },
     });
+  });
+}
+
+/**
+ * Plan distribution across the registered businesses.
+ *
+ * `planId` is a label the provider records; nothing entitles a workspace from it.
+ * This read answers "how many workspaces carry each label", including the real
+ * and common answer "none yet", which is why the null bucket is returned rather
+ * than dropped. Plan names are resolved in a second query so a workspace holding
+ * an ARCHIVED plan still shows its label instead of reading as unassigned.
+ */
+export type PlanDistributionRow = {
+  planId: string | null;
+  code: string | null;
+  name: string | null;
+  count: number;
+};
+
+export async function getPlanDistribution(): Promise<PlanDistributionRow[]> {
+  return withPlatformReadScope(async () => {
+    const grouped = await prisma.tenant.groupBy({
+      by: ["planId"],
+      _count: { _all: true },
+    });
+
+    const planIds = grouped
+      .map((row) => row.planId)
+      .filter((id): id is string => id !== null);
+
+    const plans =
+      planIds.length === 0
+        ? []
+        : await prisma.plan.findMany({
+            where: { id: { in: planIds } },
+            select: { id: true, code: true, name: true },
+          });
+
+    const planById = new Map(plans.map((plan) => [plan.id, plan]));
+
+    return grouped
+      .map((row) => {
+        const plan = row.planId ? planById.get(row.planId) : undefined;
+        return {
+          planId: row.planId,
+          code: plan?.code ?? null,
+          name: plan?.name ?? null,
+          count: row._count._all,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.count - a.count || (a.name ?? "").localeCompare(b.name ?? ""),
+      );
+  });
+}
+
+/**
+ * The administrative actions the console reports on its overview.
+ *
+ * This is deliberately the *tenant-administration* slice of the audit trail —
+ * provisioning, lifecycle transitions, owner invitations and the provider edits
+ * — read under `platform.audit.read`, so a platform role that may see tenants but
+ * not the audit trail cannot reach it. `tenant.created` has no platform prefix
+ * because it is the shared creation event, not a provider-only one.
+ */
+const PLATFORM_ACTIVITY_ACTIONS: readonly string[] = [
+  AUDIT_ACTIONS.TENANT_CREATED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_UPDATED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_ACTIVATED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_SUSPENDED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_REACTIVATED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_PLAN_ASSIGNED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_DOMAIN_UPDATED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_BRANDING_UPDATED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_NUMBERING_UPDATED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_OWNER_INVITED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_OWNER_ASSIGNED,
+  AUDIT_ACTIONS.PLATFORM_TENANT_OWNER_INVITATION_REVOKED,
+];
+
+export type AdminActivityRow = {
+  id: string;
+  action: string;
+  tenantId: string | null;
+  tenantName: string | null;
+  tenantSlug: string | null;
+  actorLabel: string | null;
+  createdAt: Date;
+};
+
+export async function getRecentAdminActivity(
+  limit = 8,
+): Promise<AdminActivityRow[]> {
+  return withPlatformReadScope(async () => {
+    const rows = await prisma.auditLog.findMany({
+      where: { action: { in: [...PLATFORM_ACTIVITY_ACTIONS] } },
+      orderBy: { createdAt: "desc" },
+      take: Math.min(Math.max(limit, 1), 50),
+      select: {
+        id: true,
+        action: true,
+        tenantId: true,
+        createdAt: true,
+        user: { select: { email: true } },
+        tenant: { select: { name: true, slug: true } },
+      },
+    });
+
+    // A `tenant.created` row is written before the tenant-scoped read scope can
+    // see the tenant row itself, so the joined name may be absent. `tenantId`
+    // still links to the workspace; the page falls back to it rather than
+    // inventing a name.
+    return rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      tenantId: row.tenantId,
+      tenantName: row.tenant?.name ?? null,
+      tenantSlug: row.tenant?.slug ?? null,
+      actorLabel: row.user?.email ?? null,
+      createdAt: row.createdAt,
+    }));
+  }, PERMISSIONS.PLATFORM_AUDIT_READ);
+}
+
+/**
+ * Operational warnings for the overview.
+ *
+ * Each warning is a count derived from a column this deployment actually
+ * maintains — it is not a fabricated health score. `syncRefusals` is meaningful
+ * even though the MVP has no sync transport: the column exists and a non-null
+ * code is a recorded refusal. Everything the console cannot measure (revenue,
+ * uptime, usage) is simply absent, and the page labels it as unmeasured rather
+ * than showing a zero that would read as a measured "none".
+ */
+export type OperationalWarningKey =
+  | "syncRefusals"
+  | "suspended"
+  | "awaitingOwner";
+
+export type OperationalWarning = {
+  key: OperationalWarningKey;
+  count: number;
+};
+
+export async function getOperationalWarnings(): Promise<OperationalWarning[]> {
+  return withPlatformReadScope(async () => {
+    const [syncRefusals, suspended, awaitingOwner] = await Promise.all([
+      prisma.tenant.count({ where: { lastSyncErrorCode: { not: null } } }),
+      prisma.tenant.count({ where: { status: "SUSPENDED" } }),
+      // Awaiting onboarding: still PENDING, no owner has accepted, and no owner
+      // invitation is outstanding. A PENDING workspace with a live invitation is
+      // waiting on the invitee, not on the provider, so it is not counted here.
+      prisma.tenant.count({
+        where: {
+          status: "PENDING",
+          members: { none: { role: "TENANT_OWNER" } },
+          invitations: { none: { role: "TENANT_OWNER", status: "PENDING" } },
+        },
+      }),
+    ]);
+
+    return [
+      { key: "syncRefusals", count: syncRefusals },
+      { key: "suspended", count: suspended },
+      { key: "awaitingOwner", count: awaitingOwner },
+    ];
   });
 }
 

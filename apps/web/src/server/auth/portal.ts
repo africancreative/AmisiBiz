@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth/session-user";
 import { prisma, runInScope, sessionScope } from "@amisibiz/database";
-import { PERMISSIONS } from "@amisibiz/auth";
-import { authorizeTenant } from "./authorization";
-import { resolvePortalContext, type PortalContext } from "@/server/services/documents/portal";
+import {
+  resolvePortalContext,
+  type PortalContext,
+} from "@/server/services/documents/portal";
 
 export type PortalState =
   | {

@@ -647,6 +647,60 @@ portalUserId])`, so a `CUSTOMER_PORTAL_USER` maps to at most one contact per
 - **Depends on:** Phase 03.
 - **Report:** `phase-07-audit-observability-report.md`.
 
+### AGENT 4 directive — business workspace, branding, CRM and catalogue 🟡 DELIVERED IN THE WORKING TREE (gates green; uncommitted; live-DB proof still gated on #38)
+
+- Tasks: sections A–F of the directive — `/app/*` workspace navigation and
+  dashboard, business profile and branding, customer management, catalogue
+  management, customer-specific catalogue and pricing, manual data entry — under an
+  acceptance gate of seven properties.
+- Reality of scope: **A–E were already built across Phases 03–05**; this pass closed
+  what was actually missing. Section A's "Customer portal access management" nav
+  entry pointed at a page that did not exist — it is now
+  `/[locale]/app/settings/portal`, backed by
+  `server/actions/portal-access.ts` (`getPortalAccessOverviewAction`,
+  `grantPortalAccessAction`, `revokePortalAccessAction`), gated on
+  `portal.access.manage` (owner/admin only, and a write permission, so a suspended
+  workspace and a support grant are refused). Section E's pricing precedence was
+  resolved in the UI; task #68 moved the resolution into the server transaction
+  (catalogue → override → line) and aligned the tests to `ItemStatus`' real
+  vocabulary (`ACTIVE`/`INACTIVE`, no `ARCHIVED`). `/[locale]/dashboard` is now the
+  forward it was documented as: platform admin with no workspace → `/admin`,
+  `CUSTOMER_PORTAL_USER` → `/portal`, everyone else → `/app`, replacing a second
+  untranslated copy of the overview that printed slug/status/currency outside the
+  workspace guard.
+- **The security shape of the portal screen:** it links `Contact.portalUserId` and
+  never creates an identity or flips a role, because `tenant_member_insert` RLS
+  makes the Team invitation flow the single door to `CUSTOMER_PORTAL_USER`; a
+  second path from a settings screen would be strictly weaker. Every write is a
+  compare-and-set on `{ id, tenantId, portalUserId }` with `count === 0` reported as
+  a conflict, and the audit events carry ids only.
+- **Acceptance:** 74 new cases (`agent4-portal-access.test.ts` 33,
+  `agent4-acceptance-gate.test.ts` 41) over the gate lines that had no proof:
+  branding writes pinned to the authorized tenant and updated by row id so no
+  payload can move a record between workspaces; archiving a customer writes exactly
+  `{ status, archivedAt }` and deletes nothing, with the surviving document count
+  audited; and per-field error-state coverage for the four shipped forms plus
+  `invalidInput()`.
+- **Gaps this pass records rather than hides** (full list in the report §4): RLS
+  still inert in the deployed app (#38); no DOM/RTL harness, so form error state is
+  proven at the schema layer and not as rendered output; duplicate detection is
+  email-only; `updateDocumentDraftAction` has no UI caller, so an issued draft's
+  lines cannot be corrected; `branding-page.tsx` has no `useTranslations` at all
+  (≈34 English strings, task #71); a long tail of `TenantBranding` columns
+  (templates/customizations, numbering, eTIMS, Cloudinary, DPO, Mailtrap) is read by
+  nothing; and the Swahili catalogue rendered "invoice" as **"Ankara"** in five
+  places — now "Ingza", with the remaining Swahili wording left for a fluent
+  reviewer rather than guessed at.
+- **Coupling warning:** another agent states the `Contact`/`ContactItem`/`Item`
+  models are **not frozen** and `/app/{items,contacts}/` is mid-remodel. This
+  phase's tests are written against the current field shapes, so sections C/D/E
+  need re-verification when that lands.
+- **Gate:** `format:check`, `lint`, `type-check` clean; web suite green;
+  `next build` succeeded with `/[locale]/app/settings/portal/page` present in
+  `.next/app-path-routes-manifest.json`. Uncommitted, in a 61-entry working tree
+  shared with other agents.
+- **Report:** `agent-4-business-workspace-report.md`.
+
 ### Phase 08 — Hardening & release readiness
 
 - Tasks: full security suite, RLS + least-privileged DB role, distributed rate limiting, email transport, coverage thresholds, performance/load, E2E breadth, accessibility pass, deployment config (`vercel.json`), CI pipeline, backups/DR runbook.

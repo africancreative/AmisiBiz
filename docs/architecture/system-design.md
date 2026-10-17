@@ -1,6 +1,10 @@
 # AmisiBiz — System Design
 
-- **Status:** Proposed (Phase 00)
+- **Status:** Phase 00 **target** design (historical). For the **as-built**
+  system read `system-overview.md` and `data-model.md`. This document predates
+  the Supabase→Neon migration and the native HMAC auth stack, so its stack
+  (Auth.js/Supabase), data-access paths and early route map are the _original
+  design of record_, not the current implementation.
 - **Audience:** Engineering
 - **Companion docs:** `repository-audit.md`, `security-model.md`, `../implementation/phase-checklist.md`
 

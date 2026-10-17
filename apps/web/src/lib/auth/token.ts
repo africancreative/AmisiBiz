@@ -74,7 +74,9 @@ export async function verifySessionToken(
     return {
       userId: payload.userId,
       sessionVersion: payload.sessionVersion,
-      ...(payload.platformRole !== undefined ? { platformRole: payload.platformRole } : {}),
+      ...(payload.platformRole !== undefined
+        ? { platformRole: payload.platformRole }
+        : {}),
     };
   } catch {
     return null;

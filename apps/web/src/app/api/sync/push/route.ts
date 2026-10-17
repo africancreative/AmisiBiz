@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return NextResponse.json(
       { error: "Invalid payload", details: parsed.error.format() },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -19,6 +19,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
   }
 
-  const result = await handleSyncPush({ _userId: user.id, tenantId: parsed.data.clientId, envelope: parsed.data });
+  const result = await handleSyncPush({
+    _userId: user.id,
+    tenantId: parsed.data.clientId,
+    envelope: parsed.data,
+  });
   return NextResponse.json({ success: true, result });
 }

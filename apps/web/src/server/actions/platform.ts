@@ -8,7 +8,10 @@ import {
 } from "@/server/auth/authorization";
 import { PERMISSIONS, type Permission } from "@amisibiz/auth";
 import { appendAuditLog, AUDIT_ACTIONS, type AuditEvent } from "@/lib/audit";
-import { platformCreateTenantSchema } from "@/lib/validations/tenant";
+import {
+  platformCreateTenantSchema,
+  revokeInvitationSchema,
+} from "@/lib/validations/tenant";
 import {
   statusTransitionSchema,
   platformUpdateTenantSchema,
@@ -1059,6 +1062,69 @@ export async function assignTenantOwnerAction(
         // The address is the subject of the record here (who was made owner), and
         // it is a business contact the operator just entered — not customer PII.
         metadata: { email, refreshed: invitation.status === "ACCEPTED" },
+      };
+    },
+  });
+}
+
+/**
+ * Server Action: Revoke a pending owner invitation (platform operator only).
+ *
+ * The counterpart to `assignTenantOwnerAction`: withdrawing an invitation an
+ * operator issued in error retires the PENDING row so its token can never be
+ * accepted. Only a PENDING invitation can be revoked — an ACCEPTED one already
+ * produced a membership and is ended by a role change inside the workspace, not
+ * by rewriting history here. The refusal wording is the same whether the row is
+ * missing or belongs to another tenant, so this path never confirms a foreign
+ * invitation exists.
+ */
+export async function revokeTenantOwnerInvitationAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const parsed = revokeInvitationSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid invitation reference.");
+  }
+
+  const { tenantId, invitationId } = parsed.data;
+
+  return executeProviderWrite({
+    tenantId,
+    actorId: session.user.id,
+    permission: PERMISSIONS.PLATFORM_TENANTS_CREATE,
+    logLabel: "revokeTenantOwnerInvitationAction",
+    failureMessage: "Failed to revoke the owner invitation.",
+    work: async (tx) => {
+      const tenant = await requireTenant(tx, tenantId);
+
+      const invitation = await tx.invitation.findUnique({
+        where: { id: invitationId },
+        select: { id: true, tenantId: true, email: true, status: true },
+      });
+
+      if (!invitation || invitation.tenantId !== tenant.id) {
+        throw new ProviderRefusalError("Invitation not found.", "NOT_FOUND");
+      }
+
+      if (invitation.status !== "PENDING") {
+        throw new ProviderRefusalError(
+          "Only a pending invitation can be revoked.",
+          "CONFLICT",
+        );
+      }
+
+      await tx.invitation.update({
+        where: { id: invitation.id },
+        data: { status: "REVOKED" },
+      });
+
+      return {
+        action: AUDIT_ACTIONS.PLATFORM_TENANT_OWNER_INVITATION_REVOKED,
+        resource: "Invitation",
+        resourceId: invitation.id,
+        metadata: { email: invitation.email },
       };
     },
   });

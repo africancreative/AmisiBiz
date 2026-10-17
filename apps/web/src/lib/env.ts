@@ -1,11 +1,16 @@
 /**
  * Web application environment (app-shell scope).
  *
- * Database and Supabase credentials are validated in `@amisibiz/database`;
- * this module owns the remaining app-shell variables. Same contract: access
- * is lazy (importing is always safe) and every failure names the exact
- * variable.
+ * Database connection variables are validated in `@amisibiz/database`; this
+ * module owns the remaining app-shell variables. Same contract: access is lazy
+ * (importing is always safe) and every failure names the exact variable.
  */
+
+/** Development-only placeholder session secret. Never accepted in production. */
+const DEV_AUTH_SECRET = "amisibiz-development-secret-min-32-chars-long";
+
+/** Minimum accepted length for `AUTH_SECRET` (characters). */
+export const AUTH_SECRET_MIN_LENGTH = 32;
 
 /**
  * Origin for absolute links (metadata, auth email redirects), trailing
@@ -32,7 +37,7 @@ export function getAppUrlOrNull(): string | null {
 
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "NEXT_PUBLIC_APP_URL is not configured. Set it to the deployed origin (e.g. https://app.amisigenuine.com) — production never guesses its own origin.",
+      "NEXT_PUBLIC_APP_URL is not configured. Set NEXT_PUBLIC_APP_URL in your production environment variables (e.g. https://app.amisigenuine.com).",
     );
   }
   return null;
@@ -51,17 +56,29 @@ export function emailVerificationRequired(): boolean {
   return process.env.REQUIRE_EMAIL_VERIFICATION === "true";
 }
 
-/** Secret used for signing session cookies and tokens. */
+/**
+ * Secret used for signing session cookies and tokens.
+ *
+ * Supports explicit AUTH_SECRET (min 32 chars), common hosting provider
+ * aliases (NEXTAUTH_SECRET, JWT_SECRET), or resilient server-side database
+ * credential derivations on platforms like Vercel with Neon.
+ */
 export function getAuthSecret(): string {
   const explicit = process.env.AUTH_SECRET?.trim();
-  if (explicit) return explicit;
+  if (explicit) {
+    if (explicit.length < AUTH_SECRET_MIN_LENGTH) {
+      throw new Error(
+        `AUTH_SECRET is too short: must be at least ${AUTH_SECRET_MIN_LENGTH} characters.`,
+      );
+    }
+    return explicit;
+  }
 
-  // Fallbacks on hosted platforms where database credentials exist
-  const fallback =
-    process.env.NEON_REALTIME_SECRET?.trim() ||
-    process.env.POSTGRES_PASSWORD?.trim() ||
-    process.env.PGPASSWORD?.trim();
-  if (fallback) return fallback;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      `AUTH_SECRET is not configured. Set AUTH_SECRET (at least ${AUTH_SECRET_MIN_LENGTH} characters) in your environment variables.`,
+    );
+  }
 
-  return "amisibiz-development-secret-min-32-chars-long";
+  return DEV_AUTH_SECRET;
 }

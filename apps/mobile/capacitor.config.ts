@@ -11,7 +11,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
  * - The Android platform is NOT added to the repository yet (see README for
  *   the exact commands and prerequisites).
  * - Security: the shell only ever holds the user's own session tokens; the
- *   Supabase secret key must never reach this bundle (constitution).
+ *   privileged server credentials must never reach this bundle (constitution).
  */
 const config: CapacitorConfig = {
   appId: "com.amisigenuine.amisibiz",

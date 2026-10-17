@@ -40,7 +40,7 @@ export type TenantBranding = {
   accentColor: string;
   /** Foreground colour placed on top of the primary colour. */
   primaryForeground: string;
-  /** Optional logo URL (Supabase Storage or similar). */
+  /** Optional logo URL (object storage or local uploads). */
   logoUrl?: string | null | undefined;
 };
 

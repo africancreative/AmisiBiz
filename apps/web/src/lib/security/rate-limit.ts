@@ -191,6 +191,37 @@ async function getRedisStore(): Promise<RedisStore | null> {
   return redisStore;
 }
 
+export type RateLimitBackend = "redis" | "upstash" | "memory";
+
+/** Which backing store is currently configured (from env only). */
+export function getRateLimitBackend(): RateLimitBackend {
+  if (
+    process.env.UPSTASH_REDIS_REST_URL?.trim() &&
+    process.env.UPSTASH_REDIS_REST_TOKEN?.trim()
+  ) {
+    return "upstash";
+  }
+  if (process.env.REDIS_URL?.trim()) return "redis";
+  return "memory";
+}
+
+let warnedUnbackedProduction = false;
+
+/**
+ * Emit a one-time setup error when production is running without a shared
+ * store. The limiter still answers (the app must not brick), but the operator
+ * is told plainly that the protection is per-instance and therefore weak.
+ */
+function warnIfUnbackedInProduction(): void {
+  if (process.env.NODE_ENV !== "production") return;
+  if (getRateLimitBackend() !== "memory") return;
+  if (warnedUnbackedProduction) return;
+  warnedUnbackedProduction = true;
+  console.warn(
+    "[rate-limit] No REDIS_URL or UPSTASH_* configured: rate limiting uses an in-process store, which does not hold across serverless instances. Configure a shared store before production.",
+  );
+}
+
 /**
  * Main rate limiting function.
  * Uses Redis/Upstash in production, in-memory in development.
@@ -200,7 +231,10 @@ export async function rateLimit(
   options: RateLimitOptions,
 ): Promise<RateLimitResult> {
   // In development, do not lock out developers/administrators while testing
-  if (process.env.NODE_ENV === "development" && process.env.ENABLE_DEV_RATE_LIMIT !== "true") {
+  if (
+    process.env.NODE_ENV === "development" &&
+    process.env.ENABLE_DEV_RATE_LIMIT !== "true"
+  ) {
     return {
       success: true,
       limit: options.limit,
@@ -208,6 +242,8 @@ export async function rateLimit(
       resetAt: Date.now() + options.windowMs,
     };
   }
+
+  warnIfUnbackedInProduction();
 
   const store = await getRedisStore();
 

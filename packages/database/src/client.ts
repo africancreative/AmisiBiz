@@ -36,7 +36,10 @@ function resolveScopedUrl(): string {
   const appUrl = process.env[APP_DATABASE_URL_ENV]?.trim();
   if (appUrl) return appUrl;
 
-  const ownerUrl = process.env.DATABASE_URL?.trim();
+  const ownerUrl =
+    process.env.DATABASE_URL?.trim() ||
+    process.env.POSTGRES_PRISMA_URL?.trim() ||
+    process.env.POSTGRES_URL?.trim();
   if (!ownerUrl) {
     throw new Error(
       [

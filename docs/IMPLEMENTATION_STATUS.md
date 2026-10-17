@@ -198,6 +198,30 @@ session wrapper, no `SyncOperation` receipt table, no `SyncDeletion` tombstones,
 | Windows                                                                             | **blocked, not built** — no Rust/MSVC, and `@tauri-apps/plugin-sql` 2.6.0 has no transaction API and binds `$n` instead of `?`                                      |
 | **gate**                                                                            | conflict, authorization-expiry, suspension and recovery: **passing on the device, untested against a server** → the offline feature set is **not production-ready** |
 
+### AGENT 4 directive run — business workspace, branding, CRM and catalogue (2026-10-17, tasks #68–#70)
+
+Most of sections A–E already existed from Phases 03–05; this pass closed what was
+actually missing. Section A's **Customer portal access management** nav entry
+pointed at a page that did not exist — it is now `/[locale]/app/settings/portal`,
+gated on `portal.access.manage` (owner/admin; a write permission, so a suspended
+workspace and a support grant are refused). Section E's pricing precedence moved
+into the server transaction (#68). `/[locale]/dashboard` became the forward it was
+documented as, replacing an untranslated second copy of the overview. Detail,
+acceptance mapping and the gap list:
+`implementation/agent-4-business-workspace-report.md`.
+
+| Gate                 | Result                                                                                                                                                                                                                                                             |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm type-check`    | **10/10 green**, incl. fresh `@amisibiz/documents` + `@amisibiz/web`                                                                                                                                                                                               |
+| `pnpm lint`          | **0 errors / 2 warnings**, both in files this phase did not touch                                                                                                                                                                                                  |
+| `pnpm test:run`      | **538 passed / 33 skipped (571)** — 22 files + 1 skipped; the skip is `integration-security.test.ts` (needs `TEST_DATABASE_URL`). New: `agent4-portal-access` 33, `agent4-acceptance-gate` 41                                                                      |
+| `pnpm build`         | green; `/[locale]/app/settings/portal/page` confirmed in `app-path-routes-manifest.json`                                                                                                                                                                           |
+| `pnpm check:bundles` | clean — **246 files / 5.4 MB**                                                                                                                                                                                                                                     |
+| `pnpm format:check`  | **red on two files that are not this phase's** (`lib/admin/tenant-queries.ts`, `server/actions/auth.ts`); every AGENT 4 file is Prettier-clean                                                                                                                     |
+| live database        | **not probed** — no migration added; **RLS still inert (#38)**, so every claim here is application-layer                                                                                                                                                           |
+| **not** verified     | any browser walkthrough of the portal screen; rendered form error states (there is **no jsdom/RTL harness** — error state is proven at the schema + `ActionResult` layer); the `@@unique([tenantId, portalUserId])` index against a running Postgres               |
+| **coupling**         | another agent states `Contact`/`ContactItem`/`Item` are **not frozen**; the two `agent4-*` suites were left in place but are **not** being revalidated against the moving shape, and no new tests were added against those surfaces (#72 records the re-targeting) |
+
 ## Open risks (top items — full register: `implementation/phase-04.5b-monorepo-and-clients-audit.md` §5)
 
 1. **S2 — RLS inert:** the runtime cannot yet connect as `amisibiz_app` (no

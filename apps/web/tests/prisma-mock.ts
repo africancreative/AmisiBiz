@@ -248,7 +248,6 @@ export const connectionBypassesRowLevelSecurity = vi.fn(
 export const assertRowLevelSecurityActive = vi.fn(
   async (): Promise<{ ok: true }> => ({ ok: true }),
 );
-export const createAdminSupabase = vi.fn();
 
 /**
  * Flatten every bound value passed to `$executeRaw` so far.

@@ -73,6 +73,23 @@ const EXTENSION_BY_MIME: Record<string, string> = {
   "image/webp": "webp",
 };
 
+let warnedEphemeralStorage = false;
+
+/**
+ * Record, once, that brand assets are being written to the local filesystem.
+ * On serverless hosting (e.g. Vercel) that storage is ephemeral, so this is a
+ * clear setup signal rather than a silent data-loss bug. It never blocks the
+ * write — replaced by real private object storage in the P0/P1 backlog.
+ */
+function warnIfStorageEnvironmentIsEphemeral(): void {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) return;
+  if (warnedEphemeralStorage) return;
+  warnedEphemeralStorage = true;
+  console.warn(
+    "[logo-storage] Assets are written to the local filesystem, which is ephemeral on serverless hosting. Configure private object storage before production.",
+  );
+}
+
 export function logoSizeProblem(size: number): string | null {
   if (size === 0 || size > LOGO_MAX_BYTES) {
     return "File must be between 1 byte and 5 MB";
@@ -139,6 +156,8 @@ export async function storeTenantLogo(
   buffer: Buffer,
   mimeType: string,
 ): Promise<StoredLogo> {
+  warnIfStorageEnvironmentIsEphemeral();
+
   const fileName = `${randomBytes(16).toString("hex")}.${EXTENSION_BY_MIME[mimeType]}`;
   const uploadDir = join(process.cwd(), "uploads", "tenants", tenantId, "logo");
   await mkdir(uploadDir, { recursive: true });

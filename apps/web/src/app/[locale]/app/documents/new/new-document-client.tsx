@@ -9,6 +9,13 @@ import { Textarea } from "@amisibiz/ui/textarea";
 import { Label } from "@amisibiz/ui/label";
 import { Separator } from "@amisibiz/ui/separator";
 import { createDocumentDraftAction } from "@/server/actions/document";
+import { getContactItemsAction } from "@/server/actions/contact-item";
+import {
+  resolveCatalogueLineFacts,
+  type CatalogueItemSource,
+  type CustomerCatalogueOverride,
+  type DocumentLineDiscount,
+} from "@amisibiz/documents";
 import { Plus, X, FileText, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -21,10 +28,35 @@ interface ContactOption {
   type: "INDIVIDUAL" | "BUSINESS";
 }
 
+/**
+ * A catalogue row, in exactly the shape the shared precedence function takes.
+ *
+ * The form runs `resolveCatalogueLineFacts` from `@amisibiz/documents` — the same
+ * function the server's line resolver calls inside the write transaction — so what
+ * this page previews and what the server stores are produced by one implementation,
+ * not by two that have to be kept in step.
+ */
+export type ItemOption = CatalogueItemSource;
+
+/** One of the tenant's tax classifications, for a line that is not a catalogue line. */
+export interface TaxRateOption {
+  id: string;
+  label: string;
+}
+
+/** A customer's agreement for one catalogue item. */
+interface AgreementOption extends CustomerCatalogueOverride {
+  itemId: string;
+}
+
 interface NewDocumentClientProps {
   locale: string;
   tenantId: string;
   contacts: ContactOption[];
+  itemOptions: ItemOption[];
+  taxRateOptions: TaxRateOption[];
+  /** False when the role may write documents but may not read the catalogue. */
+  canReadCatalogue: boolean;
   initialType: "QUOTATION" | "INVOICE" | "DELIVERY_NOTE" | "";
   allowedTypes: ("QUOTATION" | "INVOICE" | "DELIVERY_NOTE")[];
   canCreateQuotation: boolean;
@@ -36,6 +68,10 @@ interface NewDocumentClientProps {
 
 interface LineInput {
   id: string;
+  /** Empty means a free-text line, which the engine prices from this request. */
+  itemId: string;
+  /** Read-only on a catalogue line: it is the item's code, not the writer's. */
+  itemCode: string;
   description: string;
   quantity: string;
   unitPrice: string;
@@ -44,9 +80,13 @@ interface LineInput {
   discountPercent: string;
   discountAmount: string;
   taxRateId: string;
+  /** Which price won, as the resolver reported it. Drives the hint below. */
+  priceSource: "customer" | "catalogue" | "";
 }
 
 const DEFAULT_LINE: Omit<LineInput, "id"> = {
+  itemId: "",
+  itemCode: "",
   description: "",
   quantity: "1",
   unitPrice: "0",
@@ -55,11 +95,94 @@ const DEFAULT_LINE: Omit<LineInput, "id"> = {
   discountPercent: "0",
   discountAmount: "0",
   taxRateId: "",
+  priceSource: "",
 };
 
 /** Mirrors `decimalStringSchema(4)` for the two fields a line is priced from. */
 const DECIMAL_QUANTITY = /^\d+(?:\.\d{1,4})?$/;
 const DECIMAL_AMOUNT = /^\d+(?:\.\d{1,4})?$/;
+/** `percentSchema` — a percentage discount is 0–100, never a fraction. */
+const DECIMAL_PERCENT = /^(?:100|[1-9]?\d)(?:\.\d{1,4})?$/;
+
+/**
+ * A date input names a calendar day, so it is anchored at midnight UTC.
+ *
+ * The detail view does the same and the server reads the day back out of the
+ * timestamp (`calendarDate`), which is what makes an agreement's validity window be
+ * tested against the day the person typed. A local-midnight reading would push a
+ * +03:00 "today" back a day — and with it the price the line resolves at.
+ */
+function toIsoDate(input: string): string {
+  return new Date(`${input}T00:00:00.000Z`).toISOString();
+}
+
+/**
+ * The fields the catalogue owns on a line.
+ *
+ * Compared rather than blindly copied, so the re-pricing effect below only renders
+ * when a figure genuinely changed.
+ */
+function factsEqual(a: LineInput, b: LineInput): boolean {
+  return (
+    a.description === b.description &&
+    a.itemCode === b.itemCode &&
+    a.unitOfMeasure === b.unitOfMeasure &&
+    a.unitPrice === b.unitPrice &&
+    a.discountType === b.discountType &&
+    a.discountPercent === b.discountPercent &&
+    a.discountAmount === b.discountAmount &&
+    a.taxRateId === b.taxRateId &&
+    a.priceSource === b.priceSource
+  );
+}
+
+/** The line's own discount, in the shape the shared resolver takes. */
+function discountOf(line: LineInput): DocumentLineDiscount {
+  return {
+    discountType: line.discountType || null,
+    discountPercent: line.discountPercent || "0",
+    discountAmount: line.discountAmount || "0",
+  };
+}
+
+/**
+ * Refills a line from the catalogue and that customer's agreement.
+ *
+ * This calls `resolveCatalogueLineFacts` — the same function the server's line
+ * resolver calls inside the write transaction — so the figure shown here is the
+ * figure that will be stored, and a suspended or expired agreement falls back to the
+ * standard price on both sides. Everything it returns is copied, including the
+ * discount and the tax classification, because the server overwrites all of it on
+ * submit: a price typed into this form has no authority over a catalogue item.
+ */
+function applyCatalogueFacts(
+  line: LineInput,
+  item: ItemOption,
+  agreement: AgreementOption | null,
+  asOf: string,
+): LineInput {
+  const facts = resolveCatalogueLineFacts({
+    item,
+    override: agreement,
+    documentDiscount: discountOf(line),
+    // The issue date is the day the agreement's window is tested against, read the
+    // same way the server reads it (`calendarDate(input.issueDate)`).
+    asOf,
+  });
+
+  return {
+    ...line,
+    description: facts.description,
+    itemCode: facts.itemCode ?? "",
+    unitOfMeasure: facts.unitOfMeasure,
+    unitPrice: facts.unitPrice,
+    discountType: facts.discountType ?? "",
+    discountPercent: facts.discountPercent,
+    discountAmount: facts.discountAmount,
+    taxRateId: facts.taxRateId ?? "",
+    priceSource: facts.priceSource,
+  };
+}
 
 function typeLabel(type: string): string {
   switch (type) {
@@ -78,6 +201,9 @@ export function NewDocumentClient({
   locale,
   tenantId,
   contacts,
+  itemOptions,
+  taxRateOptions,
+  canReadCatalogue,
   initialType,
   allowedTypes,
   canCreateQuotation,
@@ -97,8 +223,11 @@ export function NewDocumentClient({
   );
   const [contactId, setContactId] = React.useState<string>("");
   const [currency, setCurrency] = React.useState("KES");
-  const [issueDate, setIssueDate] = React.useState(
-    new Date().toISOString().split("T")[0],
+  // Typed as `string` and built with `slice`: `split("T")[0]` would make the state
+  // `string | undefined`, and this value is now the day every agreement window is
+  // tested against.
+  const [issueDate, setIssueDate] = React.useState<string>(
+    new Date().toISOString().slice(0, 10),
   );
   const [dueDate, setDueDate] = React.useState("");
   const [expiryDate, setExpiryDate] = React.useState("");
@@ -114,13 +243,136 @@ export function NewDocumentClient({
     Record<string, string[]>
   >({});
 
+  /* ------------------------- the customer's agreements ------------------------- */
+
+  /**
+   * This customer's catalogue agreements, loaded when they are chosen.
+   *
+   * Read through the same authorized action the customer's own pricing page uses,
+   * so the server's tenant check runs on the way in; the keyed-by-item shape is
+   * what the resolver wants, because `(tenant, contact, item)` is the unique
+   * agreement triple. A failure here is not fatal: with no agreement loaded every
+   * line previews at the standard price, and the server still applies the real
+   * agreement when the draft is written.
+   */
+  const [agreements, setAgreements] = React.useState<
+    Record<string, AgreementOption>
+  >({});
+  const [agreementsState, setAgreementsState] = React.useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [agreementsTruncated, setAgreementsTruncated] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!contactId || !canReadCatalogue) {
+      setAgreements({});
+      setAgreementsState("idle");
+      setAgreementsTruncated(false);
+      return;
+    }
+
+    let active = true;
+    setAgreementsState("loading");
+
+    async function loadAgreements() {
+      const result = await getContactItemsAction({
+        tenantId,
+        contactId,
+        page: 1,
+        pageSize: 100,
+      });
+      if (!active) return;
+
+      if (!result.success || !result.data) {
+        setAgreements({});
+        setAgreementsState("error");
+        return;
+      }
+
+      setAgreements(
+        Object.fromEntries(
+          result.data.contactItems.map((row) => [
+            row.itemId,
+            {
+              itemId: row.itemId,
+              customCode: row.customCode,
+              customName: row.customName,
+              customUnitOfMeasure: row.customUnitOfMeasure,
+              // Exact text again: a Decimal never becomes a JS number here.
+              agreedPrice: row.agreedPrice.toFixed(4),
+              discountPercent: row.discountPercent.toFixed(4),
+              isAvailable: row.isAvailable,
+              validFrom: row.validFrom?.toISOString() ?? null,
+              validUntil: row.validUntil?.toISOString() ?? null,
+            },
+          ]),
+        ),
+      );
+      setAgreementsTruncated(
+        result.data.total > result.data.contactItems.length,
+      );
+      setAgreementsState("ready");
+    }
+
+    loadAgreements();
+    return () => {
+      active = false;
+    };
+  }, [contactId, tenantId, canReadCatalogue]);
+
+  const itemsById = React.useMemo(
+    () => new Map(itemOptions.map((item) => [item.itemId, item])),
+    [itemOptions],
+  );
+
+  /**
+   * Re-prices every catalogue line when the customer, the issue date or the
+   * agreements change.
+   *
+   * `lines` is deliberately NOT a dependency: the update is functional, and leaving
+   * it out is what keeps this from re-running on every keystroke (which would also
+   * fight the person typing a quantity). The date matters because an agreement is
+   * only in force inside its own window — moving the issue date out of the window
+   * moves the line back to the standard price, exactly as the server would.
+   */
+  React.useEffect(() => {
+    setLines((previous) => {
+      let changed = false;
+      const next = previous.map((line) => {
+        if (!line.itemId) return line;
+        const item = itemsById.get(line.itemId);
+        // A catalogue row that is no longer offered (archived between loads) keeps
+        // the figures it was filled with; the server gives the definitive answer.
+        if (!item) return line;
+        const priced = applyCatalogueFacts(
+          line,
+          item,
+          agreements[line.itemId] ?? null,
+          issueDate,
+        );
+        if (factsEqual(line, priced)) return line;
+        changed = true;
+        return priced;
+      });
+      return changed ? next : previous;
+    });
+  }, [agreements, issueDate, itemsById]);
+
+  /* -------------------------------- line edits -------------------------------- */
+
   const addLine = () => {
-    setLines([...lines, { id: crypto.randomUUID(), ...DEFAULT_LINE }]);
+    setLines((previous) => [
+      ...previous,
+      { id: crypto.randomUUID(), ...DEFAULT_LINE },
+    ]);
   };
 
   const removeLine = (id: string) => {
-    if (lines.length <= 1) return;
-    setLines(lines.filter((line) => line.id !== id));
+    setLines((previous) =>
+      previous.length <= 1
+        ? previous
+        : previous.filter((line) => line.id !== id),
+    );
   };
 
   /**
@@ -130,19 +382,54 @@ export function NewDocumentClient({
    * follows the line it belongs to.
    */
   const updateLine = (id: string, field: keyof LineInput, value: string) => {
-    setLines(
-      lines.map((line) =>
+    setLines((previous) =>
+      previous.map((line) =>
         line.id === id ? { ...line, [field]: value } : line,
       ),
     );
-    const key = `${id}-${field}`;
-    const existing = fieldErrors[key];
-    if (existing?.includes(field)) {
-      setFieldErrors({
-        ...fieldErrors,
-        [key]: existing.filter((entry) => entry !== field),
-      });
-    }
+    setFieldErrors((previous) => {
+      const key = `${id}-${field}`;
+      if (!previous[key]) return previous;
+      const { [key]: _cleared, ...rest } = previous;
+      return rest;
+    });
+  };
+
+  /**
+   * Choosing a catalogue item fills the line from it; clearing the choice hands the
+   * line back to the writer as a free-text line.
+   *
+   * The fill is a preview of the server's own answer, and the fields it sets are
+   * read-only for exactly that reason — quantity is the only commercial figure a
+   * person types for a catalogue line.
+   */
+  const selectItem = (id: string, itemId: string) => {
+    setLines((previous) =>
+      previous.map((line) => {
+        if (line.id !== id) return line;
+        if (!itemId) {
+          return { ...line, itemId: "", itemCode: "", priceSource: "" };
+        }
+        const item = itemsById.get(itemId);
+        const chosen: LineInput = { ...line, itemId };
+        // An item the resolver could not be shown a row for keeps its manual
+        // fields; the server still refuses it if it is not this tenant's.
+        if (!item) return chosen;
+        return applyCatalogueFacts(
+          chosen,
+          item,
+          agreements[itemId] ?? null,
+          issueDate,
+        );
+      }),
+    );
+    setFieldErrors((previous) => {
+      const rest = { ...previous };
+      for (const field of ["description", "unitPrice", "quantity"] as const) {
+        delete rest[`${id}-${field}`];
+      }
+      return rest;
+    });
   };
 
   const validateForm = () => {
@@ -180,6 +467,29 @@ export function NewDocumentClient({
             "Unit price must be a non-negative decimal",
           ];
         }
+
+        // A discount is one mechanism plus its value — the same pairing the
+        // server's `normaliseDiscount` insists on. Checking it here means the form
+        // can point at the line that is wrong instead of the engine rejecting the
+        // whole draft with a message about "lines".
+        if (
+          line.discountType === "PERCENT" &&
+          (!DECIMAL_PERCENT.test(line.discountPercent.trim()) ||
+            Number(line.discountPercent) <= 0)
+        ) {
+          errors[`${line.id}-discountPercent`] = [
+            "A percentage discount must be greater than 0 and no more than 100",
+          ];
+        }
+        if (
+          line.discountType === "AMOUNT" &&
+          (!DECIMAL_AMOUNT.test(line.discountAmount.trim()) ||
+            Number(line.discountAmount) <= 0)
+        ) {
+          errors[`${line.id}-discountAmount`] = [
+            "A fixed-amount discount must be greater than 0",
+          ];
+        }
       }
     }
 
@@ -202,23 +512,30 @@ export function NewDocumentClient({
         type: docType,
         contactId: contactId || null,
         currency,
-        issueDate: new Date(issueDate + "T00:00:00").toISOString(),
-        dueDate: dueDate ? new Date(dueDate + "T00:00:00").toISOString() : null,
-        expiryDate: expiryDate
-          ? new Date(expiryDate + "T00:00:00").toISOString()
-          : null,
+        issueDate: toIsoDate(issueDate),
+        dueDate: dueDate ? toIsoDate(dueDate) : null,
+        expiryDate: expiryDate ? toIsoDate(expiryDate) : null,
         customerNote: customerNote || null,
         terms: terms || null,
         lines: lines.map((line) => ({
-          itemId: null,
+          // The real link, so the server re-prices the line from the catalogue row
+          // and this customer's agreement instead of trusting this request. No item
+          // means a free-text line, which the engine prices as written.
+          itemId: line.itemId || null,
           description: line.description,
-          itemCode: null,
+          itemCode: line.itemCode || null,
           unitOfMeasure: line.unitOfMeasure,
           quantity: line.quantity,
           unitPrice: line.unitPrice,
           discountType: line.discountType || null,
-          discountPercent: line.discountPercent || "0",
-          discountAmount: line.discountAmount || "0",
+          // Only the chosen mechanism carries a value; the other is left at zero,
+          // which is the pairing the server requires.
+          discountPercent:
+            line.discountType === "PERCENT" ? line.discountPercent || "0" : "0",
+          discountAmount:
+            line.discountType === "AMOUNT" ? line.discountAmount || "0" : "0",
+          // A link, never a rate: the server copies the fraction and the label from
+          // its own row, and for a catalogue line it uses the item's classification.
           taxRateId: line.taxRateId || null,
         })),
       };
@@ -405,120 +722,274 @@ export function NewDocumentClient({
           </Button>
         </div>
 
+        {!canReadCatalogue && (
+          <p className="text-sm text-muted-foreground">
+            This role may write documents but may not read the catalogue, so
+            every line is typed by hand and priced from what you enter.
+          </p>
+        )}
+
+        {canReadCatalogue && (
+          <p className="text-sm text-muted-foreground">
+            A line chosen from the catalogue is priced by the server — from the
+            item, or from this customer&apos;s agreed price while that agreement
+            is in force. Its description, code, unit, price and tax are the
+            catalogue&apos;s to decide, so they are not editable here.
+            {agreementsState === "loading" && " Loading customer prices…"}
+            {agreementsState === "error" &&
+              " Customer prices could not be loaded, so standard prices are shown."}
+            {agreementsTruncated &&
+              " This customer has more agreements than the preview can hold; the server still applies the right one."}
+          </p>
+        )}
+
         <div className="space-y-3">
-          {lines.map((line) => (
-            <div
-              key={line.id}
-              className="grid gap-3 p-4 border rounded-lg bg-card"
-              style={{
-                gridTemplateColumns:
-                  "minmax(0, 2fr) repeat(4, minmax(0, 1fr)) auto",
-              }}
-            >
-              <div className="space-y-1">
-                <Label htmlFor={`desc-${line.id}`}>Description *</Label>
-                <Input
-                  id={`desc-${line.id}`}
-                  value={line.description}
-                  onChange={(e) =>
-                    updateLine(line.id, "description", e.target.value)
-                  }
-                  placeholder="Item description"
-                  className={
-                    fieldErrors[`${line.id}-description`]
-                      ? "border-destructive"
-                      : undefined
-                  }
-                />
-                {fieldErrors[`${line.id}-description`]?.[0] && (
-                  <p className="text-sm text-destructive">
-                    {fieldErrors[`${line.id}-description`]?.[0]}
+          {lines.map((line) => {
+            const isCatalogueLine = Boolean(line.itemId);
+            const agreedPrice =
+              isCatalogueLine && line.priceSource === "customer";
+            // Whether the price the line carries came from an agreement rather than
+            // the standard catalogue row.
+            const agreementDiscount =
+              agreedPrice &&
+              line.discountType === "PERCENT" &&
+              !/^0+(?:\.0+)?$/.test(
+                (agreements[line.itemId]?.discountPercent ?? "0").trim(),
+              );
+            const discountField =
+              line.discountType === "AMOUNT"
+                ? "discountAmount"
+                : "discountPercent";
+
+            return (
+              <div
+                key={line.id}
+                className="space-y-3 p-4 border rounded-lg bg-card"
+              >
+                <div className="grid gap-3 sm:grid-cols-12">
+                  <div className="space-y-1 sm:col-span-5">
+                    <Label htmlFor={`item-${line.id}`}>Catalogue item</Label>
+                    <Select
+                      id={`item-${line.id}`}
+                      value={line.itemId}
+                      disabled={!canReadCatalogue || isSubmitting}
+                      onChange={(e) => selectItem(line.id, e.target.value)}
+                    >
+                      <option value="">— Free-text line —</option>
+                      {/* Only items priced in this document's currency: the engine
+                          copies a price, it never converts one, so offering the rest
+                          would be offering a line the server has to refuse. */}
+                      {itemOptions
+                        .filter((item) => item.currency === currency)
+                        .map((item) => (
+                          <option key={item.itemId} value={item.itemId}>
+                            {item.name}
+                            {item.sku ? ` · ${item.sku}` : ""}
+                          </option>
+                        ))}
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-5">
+                    <Label htmlFor={`desc-${line.id}`}>Description *</Label>
+                    <Input
+                      id={`desc-${line.id}`}
+                      value={line.description}
+                      readOnly={isCatalogueLine}
+                      onChange={(e) =>
+                        updateLine(line.id, "description", e.target.value)
+                      }
+                      placeholder="Item description"
+                      className={cn(
+                        fieldErrors[`${line.id}-description`] &&
+                          "border-destructive",
+                        isCatalogueLine && "bg-muted/50",
+                      )}
+                    />
+                    {fieldErrors[`${line.id}-description`]?.[0] && (
+                      <p className="text-sm text-destructive">
+                        {fieldErrors[`${line.id}-description`]?.[0]}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-2">
+                    <Label htmlFor={`code-${line.id}`}>Code</Label>
+                    <Input
+                      id={`code-${line.id}`}
+                      value={line.itemCode}
+                      readOnly={isCatalogueLine}
+                      onChange={(e) =>
+                        updateLine(line.id, "itemCode", e.target.value)
+                      }
+                      placeholder="SKU"
+                      maxLength={50}
+                      className={isCatalogueLine ? "bg-muted/50" : undefined}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-12">
+                  <div className="space-y-1 sm:col-span-2">
+                    <Label htmlFor={`qty-${line.id}`}>Qty *</Label>
+                    <Input
+                      id={`qty-${line.id}`}
+                      type="text"
+                      inputMode="decimal"
+                      value={line.quantity}
+                      onChange={(e) =>
+                        updateLine(line.id, "quantity", e.target.value)
+                      }
+                      className={
+                        fieldErrors[`${line.id}-quantity`]
+                          ? "border-destructive"
+                          : undefined
+                      }
+                    />
+                    {fieldErrors[`${line.id}-quantity`]?.[0] && (
+                      <p className="text-sm text-destructive">
+                        {fieldErrors[`${line.id}-quantity`]?.[0]}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-2">
+                    <Label htmlFor={`uom-${line.id}`}>Unit</Label>
+                    <Input
+                      id={`uom-${line.id}`}
+                      value={line.unitOfMeasure}
+                      readOnly={isCatalogueLine}
+                      onChange={(e) =>
+                        updateLine(line.id, "unitOfMeasure", e.target.value)
+                      }
+                      placeholder="each"
+                      className={isCatalogueLine ? "bg-muted/50" : undefined}
+                    />
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-2">
+                    <Label htmlFor={`price-${line.id}`}>Unit Price *</Label>
+                    <Input
+                      id={`price-${line.id}`}
+                      type="text"
+                      inputMode="decimal"
+                      value={line.unitPrice}
+                      readOnly={isCatalogueLine}
+                      onChange={(e) =>
+                        updateLine(line.id, "unitPrice", e.target.value)
+                      }
+                      className={cn(
+                        fieldErrors[`${line.id}-unitPrice`] &&
+                          "border-destructive",
+                        isCatalogueLine && "bg-muted/50",
+                      )}
+                    />
+                    {fieldErrors[`${line.id}-unitPrice`]?.[0] && (
+                      <p className="text-sm text-destructive">
+                        {fieldErrors[`${line.id}-unitPrice`]?.[0]}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-3">
+                    <Label htmlFor={`discount-${line.id}`}>Discount</Label>
+                    <div className="flex gap-2">
+                      <Select
+                        id={`discount-${line.id}`}
+                        value={line.discountType}
+                        disabled={agreementDiscount}
+                        onChange={(e) =>
+                          updateLine(line.id, "discountType", e.target.value)
+                        }
+                      >
+                        <option value="">None</option>
+                        <option value="PERCENT">Percent %</option>
+                        <option value="AMOUNT">Amount</option>
+                      </Select>
+                      {line.discountType && !agreementDiscount && (
+                        <Input
+                          aria-label={
+                            line.discountType === "PERCENT"
+                              ? "Discount percentage"
+                              : "Discount amount"
+                          }
+                          className="w-24"
+                          type="text"
+                          inputMode="decimal"
+                          value={line[discountField]}
+                          onChange={(e) =>
+                            updateLine(line.id, discountField, e.target.value)
+                          }
+                        />
+                      )}
+                    </div>
+                    {agreementDiscount && (
+                      <p className="text-xs text-muted-foreground">
+                        This customer&apos;s agreed discount applies to the
+                        line.
+                      </p>
+                    )}
+                    {fieldErrors[`${line.id}-${discountField}`]?.[0] && (
+                      <p className="text-sm text-destructive">
+                        {fieldErrors[`${line.id}-${discountField}`]?.[0]}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-2">
+                    <Label htmlFor={`tax-${line.id}`}>Tax</Label>
+                    <Select
+                      id={`tax-${line.id}`}
+                      value={line.taxRateId}
+                      // A catalogue line's classification is the item's, not the
+                      // writer's: the server reads it back off the item either way.
+                      disabled={
+                        isCatalogueLine || !canReadCatalogue || isSubmitting
+                      }
+                      onChange={(e) =>
+                        updateLine(line.id, "taxRateId", e.target.value)
+                      }
+                      className={isCatalogueLine ? "bg-muted/50" : undefined}
+                    >
+                      <option value="">No tax</option>
+                      {taxRateOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                      {isCatalogueLine &&
+                        line.taxRateId &&
+                        !taxRateOptions.some(
+                          (o) => o.id === line.taxRateId,
+                        ) && (
+                          <option value={line.taxRateId}>
+                            The item&apos;s classification
+                          </option>
+                        )}
+                    </Select>
+                  </div>
+
+                  <div className="flex items-end justify-end sm:col-span-1">
+                    <X
+                      className="h-5 w-5 mb-2 cursor-pointer hover:text-foreground"
+                      onClick={() => removeLine(line.id)}
+                      aria-label="Remove line"
+                    />
+                  </div>
+                </div>
+
+                {isCatalogueLine && (
+                  <p className="text-xs text-muted-foreground">
+                    {agreedPrice
+                      ? "Agreed price for this customer."
+                      : "Standard catalogue price."}{" "}
+                    The server re-reads the catalogue and this customer&apos;s
+                    agreement when the draft is written.
                   </p>
                 )}
               </div>
-
-              <div className="space-y-1">
-                <Label htmlFor={`qty-${line.id}`}>Qty *</Label>
-                <Input
-                  id={`qty-${line.id}`}
-                  type="text"
-                  inputMode="decimal"
-                  value={line.quantity}
-                  onChange={(e) =>
-                    updateLine(line.id, "quantity", e.target.value)
-                  }
-                  className={
-                    fieldErrors[`${line.id}-quantity`]
-                      ? "border-destructive"
-                      : undefined
-                  }
-                />
-                {fieldErrors[`${line.id}-quantity`]?.[0] && (
-                  <p className="text-sm text-destructive">
-                    {fieldErrors[`${line.id}-quantity`]?.[0]}
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor={`uom-${line.id}`}>Unit</Label>
-                <Input
-                  id={`uom-${line.id}`}
-                  value={line.unitOfMeasure}
-                  onChange={(e) =>
-                    updateLine(line.id, "unitOfMeasure", e.target.value)
-                  }
-                  placeholder="each"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor={`price-${line.id}`}>Unit Price *</Label>
-                <Input
-                  id={`price-${line.id}`}
-                  type="text"
-                  inputMode="decimal"
-                  value={line.unitPrice}
-                  onChange={(e) =>
-                    updateLine(line.id, "unitPrice", e.target.value)
-                  }
-                  className={
-                    fieldErrors[`${line.id}-unitPrice`]
-                      ? "border-destructive"
-                      : undefined
-                  }
-                />
-                {fieldErrors[`${line.id}-unitPrice`]?.[0] && (
-                  <p className="text-sm text-destructive">
-                    {fieldErrors[`${line.id}-unitPrice`]?.[0]}
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor={`discount-${line.id}`}>Discount</Label>
-                <Select
-                  id={`discount-${line.id}`}
-                  value={line.discountType}
-                  onChange={(e) =>
-                    updateLine(line.id, "discountType", e.target.value)
-                  }
-                >
-                  <option value="">None</option>
-                  <option value="PERCENT">Percent %</option>
-                  <option value="AMOUNT">Amount</option>
-                </Select>
-              </div>
-
-              <div className="flex items-center justify-center text-muted-foreground">
-                <X
-                  className="h-5 w-5 cursor-pointer hover:text-foreground"
-                  onClick={() => removeLine(line.id)}
-                  aria-label="Remove line"
-                />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {lines.length === 1 && (

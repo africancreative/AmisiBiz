@@ -12,7 +12,7 @@
 #               from depending on one developer's laptop (#37d).
 #
 # Neither job receives real credentials. The harness additionally refuses any
-# TEST_DATABASE_URL whose host looks like the shared Supabase project, so a
+# TEST_DATABASE_URL whose host looks like the shared production database, so a
 # misconfigured secret here fails the job instead of touching production data.
 
 name: CI
@@ -31,11 +31,9 @@ permissions:
 
 env:
   # Placeholder values only — enough for env validation and the build to run
-  # without contacting any service.
+  # without contacting any service. No real credentials.
   NEXT_PUBLIC_APP_URL: "http://localhost:3000"
-  NEXT_PUBLIC_SUPABASE_URL: "https://ci-placeholder.supabase.co"
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_ci_placeholder_0000000000"
-  SUPABASE_SECRET_KEY: "sb_secret_ci_placeholder_0000000000"
+  AUTH_SECRET: "ci-placeholder-session-secret-not-a-real-key-000000"
   DATABASE_URL: "postgresql://ci:ci@localhost:5432/amisibiz_ci"
   DIRECT_URL: "postgresql://ci:ci@localhost:5432/amisibiz_ci"
 
@@ -76,26 +74,15 @@ jobs:
       - name: Proof 8 — no privileged credential reached the client bundle
         run: pnpm check:bundles
 
-      - name: Guard — no Supabase secret key value in build output
-        run: |
-          # Matches a value-shaped secret key ("sb_secret_" + 20+ key chars).
-          # The bare prefix alone is legitimate library code (Supabase's own
-          # key-format detection), so it must not trip this guard.
-          if grep -RE --binary-files=text "sb_secret_[A-Za-z0-9_-]{20,}" apps/web/.next/static apps/web/.next/server; then
-            echo "::error::Supabase secret key value found in the client/server build output"
-            exit 1
-          fi
-          echo "OK: no 'sb_secret_<value>' pattern in the Next.js build output."
-
   # ---------------------------------------------------------------------------
   # The proofs that a mock cannot give: real PostgreSQL, real policies, real
   # runtime role. #37b's harness and the committed batteries run here so the
   # eight required security properties stop depending on somebody's laptop.
   #
   # Every database in this job is created by the runner and destroyed with it.
-  # Nothing here can reach the shared Supabase project: no project credentials
-  # are configured for the job, and the harness additionally refuses any
-  # TEST_DATABASE_URL whose host looks like Supabase.
+  # Nothing here can reach the shared production database: no project
+  # credentials are configured for the job, and the harness additionally refuses
+  # any TEST_DATABASE_URL whose host looks like the production database.
   # ---------------------------------------------------------------------------
   security:
     name: RLS proofs against PostgreSQL

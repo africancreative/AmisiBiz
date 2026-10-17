@@ -14,8 +14,8 @@ import type { UserStatus } from "@prisma/client";
  * facts (`id`, `status`) for one address, is executable by the application role
  * only (revoked from PUBLIC), and is not a general read of the `User` table.
  * That is the narrow door the design §5.4 allows for the bootstrap phase; the
- * broader truth — whether an address is registered — is Supabase Auth's to
- * decide, and these callers treat a miss as "ask GoTrue".
+ * broader truth — whether an address is registered — is decided from this same
+ * function, and a miss means "no such account".
  */
 export async function findUserIdByEmail(
   email: string,

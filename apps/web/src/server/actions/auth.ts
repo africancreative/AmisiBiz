@@ -24,7 +24,7 @@ import {
   createSessionToken,
 } from "@/lib/auth/token";
 import { appendAuditLog, recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
-import { rateLimit, getClientIp } from "@/lib/security/rate-limit";
+import { rateLimit, resetRateLimit, getClientIp } from "@/lib/security/rate-limit";
 import {
   provisionTenant,
   recordTenantCreated,
@@ -70,108 +70,121 @@ async function setSessionCookie(
 export async function loginAction(
   rawInput: unknown,
 ): Promise<ActionResult<{ userId: string; platformRole?: string | null }>> {
-  const ip = (await getClientIp()) ?? "unknown";
+  try {
+    const ip = (await getClientIp()) ?? "unknown";
 
-  const allowed = await enforceAuthRateLimit("login", 10, MINUTE_MS);
-  if (!allowed) {
+    const allowed = await enforceAuthRateLimit("login", 10, MINUTE_MS);
+    if (!allowed) {
+      await recordAudit({
+        action: AUDIT_ACTIONS.AUTH_LOGIN_RATE_LIMITED,
+        ipAddress: ip,
+      });
+      return {
+        success: false,
+        error: "Too many attempts. Please try again later.",
+        code: "RATE_LIMITED",
+      };
+    }
+
+    const parsed = loginSchema.safeParse(rawInput);
+    if (!parsed.success) {
+      return { success: false, error: "Invalid email or password." };
+    }
+    const { email, password } = parsed.data;
+
+    const emailAllowed = await rateLimit(`login:email:${email.toLowerCase()}`, {
+      limit: 5,
+      windowMs: 10 * MINUTE_MS,
+    });
+    if (!emailAllowed.success) {
+      await recordAudit({
+        action: AUDIT_ACTIONS.AUTH_LOGIN_RATE_LIMITED,
+        metadata: { email: maskEmail(email) },
+        ipAddress: ip,
+      });
+      return {
+        success: false,
+        error: "Too many attempts. Please try again later.",
+        code: "RATE_LIMITED",
+      };
+    }
+
+    // Look up user directly in Neon PostgreSQL inside pre-auth scope
+    const user = await runInScope(bootstrapScope(), () =>
+      prisma.user.findUnique({
+        where: { email: email.toLowerCase() },
+        select: {
+          id: true,
+          status: true,
+          sessionVersion: true,
+          passwordHash: true,
+          platformRole: true,
+        },
+      }),
+    );
+
+    if (!user || !user.passwordHash) {
+      await recordAudit({
+        action: AUDIT_ACTIONS.AUTH_SIGN_IN_FAILED,
+        metadata: { email: maskEmail(email) },
+        ipAddress: ip,
+      });
+      return { success: false, error: "Invalid email or password." };
+    }
+
+    if (user.status !== "ACTIVE") {
+      return {
+        success: false,
+        error: "Your account has been suspended. Contact support.",
+      };
+    }
+
+    const passwordsMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!passwordsMatch) {
+      await recordAudit({
+        action: AUDIT_ACTIONS.AUTH_SIGN_IN_FAILED,
+        metadata: { email: maskEmail(email) },
+        ipAddress: ip,
+      });
+      return { success: false, error: "Invalid email or password." };
+    }
+
+    // Reset rate limit on successful credentials so valid users are never locked out
+    await resetRateLimit(`login:email:${email.toLowerCase()}`);
+
+    // Upgrade the request context to authenticated session scope
+    enterScope(
+      sessionScope(user.id, {
+        isPlatformAdmin: user.platformRole === "SUPER_ADMIN",
+        isPlatformSupport: user.platformRole === "SUPPORT",
+      }),
+    );
+
+    // Set the authenticated session cookie
+    await setSessionCookie(user.id, user.sessionVersion, user.platformRole);
+
     await recordAudit({
-      action: AUDIT_ACTIONS.AUTH_LOGIN_RATE_LIMITED,
+      action: AUDIT_ACTIONS.AUTH_SIGN_IN,
+      userId: user.id,
+      resource: "User",
+      resourceId: user.id,
       ipAddress: ip,
     });
+
+    return {
+      success: true,
+      data: { userId: user.id, platformRole: user.platformRole },
+    };
+  } catch (err) {
+    console.error("[loginAction] Unexpected error during sign in:", err);
     return {
       success: false,
-      error: "Too many attempts. Please try again later.",
-      code: "RATE_LIMITED",
+      error:
+        err instanceof Error
+          ? err.message
+          : "An unexpected error occurred during sign in. Please try again.",
     };
   }
-
-  const parsed = loginSchema.safeParse(rawInput);
-  if (!parsed.success) {
-    return { success: false, error: "Invalid email or password." };
-  }
-  const { email, password } = parsed.data;
-
-  const emailAllowed = await rateLimit(`login:email:${email.toLowerCase()}`, {
-    limit: 5,
-    windowMs: 10 * MINUTE_MS,
-  });
-  if (!emailAllowed.success) {
-    await recordAudit({
-      action: AUDIT_ACTIONS.AUTH_LOGIN_RATE_LIMITED,
-      metadata: { email: maskEmail(email) },
-      ipAddress: ip,
-    });
-    return {
-      success: false,
-      error: "Too many attempts. Please try again later.",
-      code: "RATE_LIMITED",
-    };
-  }
-
-  // Open pre-auth database scope for credential lookup
-  enterScope(bootstrapScope());
-
-  // Look up user directly in Neon PostgreSQL
-  const user = await prisma.user.findUnique({
-    where: { email: email.toLowerCase() },
-    select: {
-      id: true,
-      status: true,
-      sessionVersion: true,
-      passwordHash: true,
-      platformRole: true,
-    },
-  });
-
-  if (!user || !user.passwordHash) {
-    await recordAudit({
-      action: AUDIT_ACTIONS.AUTH_SIGN_IN_FAILED,
-      metadata: { email: maskEmail(email) },
-      ipAddress: ip,
-    });
-    return { success: false, error: "Invalid email or password." };
-  }
-
-  if (user.status !== "ACTIVE") {
-    return {
-      success: false,
-      error: "Your account has been suspended. Contact support.",
-    };
-  }
-
-  const passwordsMatch = await bcrypt.compare(password, user.passwordHash);
-  if (!passwordsMatch) {
-    await recordAudit({
-      action: AUDIT_ACTIONS.AUTH_SIGN_IN_FAILED,
-      metadata: { email: maskEmail(email) },
-      ipAddress: ip,
-    });
-    return { success: false, error: "Invalid email or password." };
-  }
-
-  // Upgrade the request context to authenticated session scope
-  enterScope(
-    sessionScope(user.id, {
-      isPlatformAdmin: user.platformRole === "SUPER_ADMIN",
-      isPlatformSupport: user.platformRole === "SUPPORT",
-    }),
-  );
-
-  // Set the authenticated session cookie
-  await setSessionCookie(user.id, user.sessionVersion, user.platformRole);
-
-  await recordAudit({
-    action: AUDIT_ACTIONS.AUTH_SIGN_IN,
-    userId: user.id,
-    resource: "User",
-    resourceId: user.id,
-    ipAddress: ip,
-  });
-
-  return {
-    success: true,
-    data: { userId: user.id, platformRole: user.platformRole },
-  };
 }
 
 /**

@@ -17,7 +17,8 @@ export function readSessionVersionClaim(accessToken: string): number {
     } | null;
 
     const version =
-      payload?.app_metadata?.amisibiz_session_version ?? payload?.sessionVersion;
+      payload?.app_metadata?.amisibiz_session_version ??
+      payload?.sessionVersion;
     if (
       typeof version !== "number" ||
       !Number.isInteger(version) ||

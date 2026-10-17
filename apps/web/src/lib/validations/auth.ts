@@ -56,10 +56,10 @@ export const forgotPasswordSchema = z.object({
 });
 
 /**
- * Sets a new password for the currently signed-in user (Supabase Auth holds
- * the session established by the recovery link — there is no token field;
- * presenting a token here would be a client-supplied credential we cannot
- * verify and must not trust).
+ * Sets a new password for the currently signed-in user (the session
+ * established by the recovery link — there is no token field; presenting a
+ * token here would be a client-supplied credential we cannot verify and must
+ * not trust).
  */
 export const updatePasswordSchema = z
   .object({

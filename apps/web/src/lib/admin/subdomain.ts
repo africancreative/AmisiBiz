@@ -64,7 +64,10 @@ export function validateSubdomain(subdomain: string): boolean {
  * @param subdomain Optional custom subdomain (must be valid and available)
  * @returns A normalized, URL-safe slug string
  */
-export function generateTenantSlug(legalName: string, subdomain?: string): string {
+export function generateTenantSlug(
+  legalName: string,
+  subdomain?: string,
+): string {
   // Normalize the legal name: lowercase, replace non-alphanumeric with hyphens
   const namePart = legalName
     .toLowerCase()
@@ -75,7 +78,9 @@ export function generateTenantSlug(legalName: string, subdomain?: string): strin
   if (subdomain) {
     const cleanSubdomain = subdomain.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     // Combine: subdomain-name
-    return `${cleanSubdomain}-${namePart}`.replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+    return `${cleanSubdomain}-${namePart}`
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "");
   }
 
   // Use just the normalized name

@@ -133,7 +133,11 @@ async function applyOperation({
   });
   if (receipt) return replayOutcome(receipt);
 
-  const outcome = await resolveOutcome({ _userId: _userId, tenantId, operation });
+  const outcome = await resolveOutcome({
+    _userId: _userId,
+    tenantId,
+    operation,
+  });
 
   await prisma.syncOperation.create({
     data: {

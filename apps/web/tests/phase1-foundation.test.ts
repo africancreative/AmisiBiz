@@ -124,7 +124,8 @@ describe("@amisibiz/database", () => {
   it("requireDatabaseEnv throws one aggregated error naming missing variables", () => {
     expect(() => database.requireDatabaseEnv({})).toThrowError(/DATABASE_URL/);
     const parsed = database.requireDatabaseEnv({
-      DATABASE_URL: "postgresql://user:pass@ep-test.neon.tech/amisibiz?sslmode=require",
+      DATABASE_URL:
+        "postgresql://user:pass@ep-test.neon.tech/amisibiz?sslmode=require",
     });
     expect(parsed.DATABASE_URL).toBe(
       "postgresql://user:pass@ep-test.neon.tech/amisibiz?sslmode=require",

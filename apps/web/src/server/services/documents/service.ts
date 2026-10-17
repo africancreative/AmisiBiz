@@ -24,6 +24,7 @@ import {
 } from "./snapshot";
 import {
   resolveLines,
+  summarisePriceSources,
   type DocumentLinePayload,
   type ResolvedLines,
 } from "./lines";
@@ -46,6 +47,10 @@ import { decimalString, decimalStringOrZero } from "./calculations";
  *  - **Payment is a fact, status is derived.** Recording a payment writes a row;
  *    `PAID`/`PARTIALLY_PAID`/`OVERDUE` are computed from the rows and the due
  *    date. A browser redirect can never mark an invoice paid.
+ *  - **A request never sets a price.** A draft written by a person is priced from
+ *    the tenant's catalogue and that customer's agreements (`lines.ts`); a draft
+ *    copied from stored rows — issuance, conversion, delivery, replacement — keeps
+ *    the figures it already had.
  *
  * The authorization check happens in the Server Action before any of this runs,
  * but it is repeated here as a guard: every function takes the context and treats
@@ -181,6 +186,16 @@ function lineRows(
   });
 }
 
+/**
+ * A document's printed date as the `YYYY-MM-DD` the agreement-window test wants.
+ *
+ * The same UTC reading the snapshot uses (`snapshot.ts`), so a document and the
+ * agreements applied to it agree on which calendar day it was written on.
+ */
+function calendarDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
 async function assertContactInTenant(
   tx: ScopedTx,
   tenantId: string,
@@ -266,10 +281,17 @@ export async function createDraft(
         where: { tenantId, idempotencyKey: input.idempotencyKey },
         select: { id: true },
       });
-      if (existing) return existing;
+      if (existing) return { ...existing, priceSources: null };
     }
 
-    const resolved = await resolveLines(tx, tenantId, input.lines);
+    // A request from a browser: every line that names a catalogue item is priced
+    // from the tenant's rows, with the customer's agreement taking precedence for
+    // the item it was written against. See `lines.ts`.
+    const resolved = await resolveLines(tx, tenantId, input.lines, {
+      contactId: input.contactId,
+      asOf: calendarDate(input.issueDate),
+      currency: input.currency,
+    });
 
     const document = await tx.document.create({
       data: {
@@ -304,7 +326,7 @@ export async function createDraft(
       toStatus: "DRAFT",
       actorId,
     });
-    return document;
+    return { id: document.id, priceSources: resolved.priceSources };
   });
 
   await recordAudit({
@@ -313,10 +335,17 @@ export async function createDraft(
     tenantId,
     resource: "Document",
     resourceId: created.id,
-    metadata: { type: input.type },
+    // Counts only — no prices, no customer, no item names. Enough for an auditor
+    // to see that agreed prices were used, small enough to keep the log clean.
+    metadata: {
+      type: input.type,
+      ...(created.priceSources
+        ? { pricing: summarisePriceSources(created.priceSources) }
+        : {}),
+    },
   });
 
-  return created;
+  return { id: created.id };
 }
 
 export interface UpdateDraftInput extends Omit<
@@ -334,12 +363,18 @@ export async function updateDraft(
 ): Promise<{ id: string }> {
   const tenantId = context.tenantId;
 
-  await prisma.$transaction(async (tx) => {
+  const priceSources = await prisma.$transaction(async (tx) => {
     const document = await loadDocumentOrThrow(tx, tenantId, input.documentId);
     assertDraft(document);
     await assertContactInTenant(tx, tenantId, input.contactId);
 
-    const resolved = await resolveLines(tx, tenantId, input.lines);
+    // Re-priced from the catalogue on every save, exactly like a create: the form
+    // is a request, and a request never sets a price.
+    const resolved = await resolveLines(tx, tenantId, input.lines, {
+      contactId: input.contactId,
+      asOf: calendarDate(input.issueDate),
+      currency: input.currency,
+    });
 
     await tx.document.update({
       where: { id: document.id },
@@ -367,6 +402,8 @@ export async function updateDraft(
     await tx.documentLine.createMany({
       data: lineRows(tenantId, document.id, resolved),
     });
+
+    return resolved.priceSources;
   });
 
   await recordAudit({
@@ -375,6 +412,7 @@ export async function updateDraft(
     tenantId,
     resource: "Document",
     resourceId: input.documentId,
+    metadata: { pricing: summarisePriceSources(priceSources) },
   });
 
   return { id: input.documentId };
@@ -507,6 +545,12 @@ export async function issueDocument(
     // Recalculate totals from the stored lines. The stored values were computed
     // the same way when the draft was written; recomputing proves they still hold
     // (a decimal policy change, a hand-edited row) before they are frozen.
+    //
+    // `source: "stored"` on purpose: issuance does NOT re-price. What gets frozen
+    // is what the operator reviewed on the draft, so a catalogue edit or an
+    // agreement expiring between the draft and the issue cannot change a document
+    // on its way out — that would be the re-pricing an auditor would call a
+    // rewrite. Re-pricing is a human decision, made by editing the draft.
     const resolved = await resolveLines(
       tx,
       tenantId,
@@ -522,6 +566,7 @@ export async function issueDocument(
         discountAmount: decimalStringOrZero(line.discountAmount),
         taxRateId: line.taxRateId,
       })),
+      { source: "stored" },
     );
 
     const contact = await tx.contact.findUnique({
@@ -1037,6 +1082,9 @@ export async function convertQuotationToInvoice(
       tx,
       tenantId,
       quotation.lines.map((line) => linePayloadFromStoredLine(line)),
+      // The prices the customer ACCEPTED are the ones the invoice must carry, so
+      // a catalogue edit since the quotation was written changes nothing here.
+      { source: "stored" },
     );
 
     const invoice = await tx.document.create({
@@ -1150,7 +1198,11 @@ export async function createDeliveryNoteFromDocument(
       );
     }
 
-    const resolved = await resolveLines(tx, tenantId, payloads);
+    const resolved = await resolveLines(tx, tenantId, payloads, {
+      // A delivery note delivers what was already sold, at the figures on the
+      // source document — never at today's catalogue price.
+      source: "stored",
+    });
 
     const note = await tx.document.create({
       data: {
@@ -1326,6 +1378,10 @@ export async function createReplacementDraft(
       tx,
       tenantId,
       original.lines.map((line) => linePayloadFromStoredLine(line)),
+      // A replacement CORRECTS a document; it is not a re-pricing of one. The
+      // copied lines keep their figures, and any price change is an explicit,
+      // authorized edit of the new draft before it is issued.
+      { source: "stored" },
     );
 
     const replacement = await tx.document.create({

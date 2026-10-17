@@ -7,6 +7,10 @@
   **Phase 2 (§14) supersedes §4.1's original "read and write are blocked"
   suspension rule**; the current policy is writes + synchronization denied, reads
   - downloads preserved.
+- **As-built (2026-10-17):** Supabase has been fully removed; the stack is native
+  HMAC-signed cookie auth on Neon PostgreSQL + Prisma. **§15 is the current state
+  of record** for authentication/authorization; the Supabase/Auth.js sections
+  above are historical.
 - **Applies to:** all phases
 - **Companion docs:** `permission-matrix.md`, `../RUNBOOK.md`,
   `../administration/provider-console.md`,
@@ -693,3 +697,47 @@ verified transition list and the operator walkthrough live in
 | Real document previews                 | What ships is a branding preview shell; per-document rendering is Phase 05 (#13).                                                                                             |
 | Provider-side logo storage             | Still the filesystem `/uploads` path; bucket + object policies exist since migration 10 (#36).                                                                                |
 | Tenant self-service branding           | Intentionally not enabled: the permission (`business.branding.update`) and row already exist so it can be switched on without touching document templates.                    |
+
+---
+
+## 15. As-built (2026-10-17): Supabase removed — native auth on Neon
+
+**This section is the current state of record for authentication and
+authorization.** Verified by direct inspection of `main` @ `ddcdec9`. Earlier
+sections that describe Auth.js, Supabase Auth (GoTrue), or an `AccountToken`
+model are historical.
+
+- **Provider removal.** Commit `2fff426` removed all Supabase implementation: no
+  `@supabase/*` dependency, no `lib/supabase/*` modules, no Supabase admin
+  client, and no Supabase environment variables referenced by the app.
+- **Identity.** `User` carries `passwordHash` (bcrypt, cost 12) and
+  `sessionVersion`; `platformRole` marks provider staff. There is no external
+  identity provider. (The `schema.prisma` comments that still name Supabase are
+  stale.)
+- **Session.** A HMAC-SHA256 token in an HttpOnly `amisibiz_session` cookie
+  carries `{ userId, sessionVersion, platformRole?, exp }`; it is verified with
+  WebCrypto per request and re-checked against the database (`status = ACTIVE`
+  and matching `sessionVersion`). Bumping `sessionVersion` is a global logout.
+- **Non-browser clients.** `Authorization: Bearer` resolves the same session via
+  an `AsyncLocalStorage` request-session override (used by the sync transport).
+- **Authorization** is unchanged from §13: a deny-by-default matrix in
+  `@amisibiz/auth`, resolved from the database in
+  `server/auth/authorization.ts`, distinguishing membership from a time-boxed
+  support grant (read-only), auditing denials, and gating writes (blocked for
+  suspended tenants and support contexts).
+- **Rate limiting.** Login (per IP + per email), register, forgot/reset — backed
+  by Redis or Upstash when configured, otherwise in-memory (dev bypass unless
+  `ENABLE_DEV_RATE_LIMIT=true`).
+
+**Current open items (these supersede the §14 table where they overlap):**
+
+| Item                       | Status                                                                                                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| RLS active at runtime      | **Still open** — the deployed connection must use the least-privileged `amisibiz_app` role (§13.1 operator step pending). CI proves the 26-case harness as `amisibiz_app`, but that is not the deployed app. |
+| DB-backed suspension proof | **Still open** (§13.6 / #37) — proven by unit tests + SQL, not by a live cross-role test.                                                                                                                    |
+| Email-dependent auth flows | **Gap** — verification, password reset and invitations have no live transport (`lib/email` is a no-op), and `/[locale]/verify-email` does not exist.                                                         |
+| Secret-in-bundle scan      | **In place** — CI `verify` job.                                                                                                                                                                              |
+| Migration chain on live    | Verify against the current 20-migration chain before claiming.                                                                                                                                               |
+
+See `../implementation/acceptance-matrix.md` (rows D10, D4/D5) and
+`../implementation/agent-work-plan.md` (P0) for the remediation.

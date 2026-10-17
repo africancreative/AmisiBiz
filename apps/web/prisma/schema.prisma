@@ -4,7 +4,8 @@
 //
 // Identity note: all primary keys are UUIDs (gen_random_uuid() on the
 // database side; application code may supply client-generated UUIDs for the
-// offline track). `User.id` equals the Supabase Auth user UUID.
+// offline track). `User` credentials are native (passwordHash) — see the User
+// model — and there is no external identity provider.
 
 generator client {
   provider = "prisma-client-js"
@@ -283,7 +284,7 @@ model TenantBranding {
   secondaryColor      String   @default("#1e3a5f") // Brand secondary color (hex)
   accentColor         String   @default("#f59e0b") // Brand accent color (hex)
   primaryForeground   String   @default("#f8fafc") // Foreground text color (hex)
-  logoUrl             String? // URL to logo stored in cloud storage or Supabase
+  logoUrl             String? // URL to stored logo (object storage or local uploads)
   contactEmail        String? // Contact email displayed on documents
   contactPhone        String? // Contact phone displayed on documents
   postalAddress       String? // Postal address for documents
@@ -927,12 +928,12 @@ model DocumentNumberSequence {
   @@index([tenantId])
 }
 
-// ─── User profile (identity authority: Supabase Auth) ────────────────────────
+// ─── User profile (identity authority: native credentials) ────────────────────────
 
-// Identity authority is Supabase Auth (GoTrue). This profile row mirrors the
-// app-relevant facts (role, status, revocation version); `id` MUST equal the
-// Supabase Auth user UUID — it is assigned from the Auth user at registration,
-// never generated here.
+// Identity authority is this table. Credentials are native: `passwordHash`
+// (bcrypt) authenticates the user and `sessionVersion` is the revocation
+// counter read by the session trust chain. `id` is generated here
+// (gen_random_uuid()); there is no external identity provider.
 model User {
   id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name           String?

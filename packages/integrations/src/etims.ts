@@ -102,10 +102,7 @@ export type EtimsReconciliationEvent = {
 };
 
 export type EtimsLabel =
-  | "recognized"
-  | "rejected"
-  | "pending"
-  | "not_submitted";
+  "recognized" | "rejected" | "pending" | "not_submitted";
 
 export function etimsLabel(
   outcome: IntegrationOutcome<EtimsConfirmation>,

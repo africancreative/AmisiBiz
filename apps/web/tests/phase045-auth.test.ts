@@ -87,7 +87,10 @@ describe("isSessionValid", () => {
 
 describe("revokeUserSessions", () => {
   it("bumps user sessionVersion in database to revoke all active tokens", async () => {
-    prismaMock.user.update.mockResolvedValue({ id: USER_ID, sessionVersion: 3 });
+    prismaMock.user.update.mockResolvedValue({
+      id: USER_ID,
+      sessionVersion: 3,
+    });
 
     await revokeUserSessions(USER_ID);
 

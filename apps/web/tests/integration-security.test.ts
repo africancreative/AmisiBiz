@@ -1183,4 +1183,150 @@ describeDb("database-backed authorization proofs (as amisibiz_app)", () => {
       ).not.toContain(forbidden);
     }
   });
+
+  // ─── Point 9: database-enforced cross-tenant integrity ─────────────────────
+  // Agent 2 acceptance gate: "Database constraints reject invalid cross-tenant
+  // relationships." Cross-tenant *relationships* are enforced below the
+  // application with BEFORE INSERT/UPDATE triggers — the mission's "equivalent
+  // database-enforced mechanism" — so a forged reference is rejected even by a
+  // query that forgot its tenant predicate. These cases connect as the table
+  // owner (bypassing RLS) on purpose: it is the trigger, not the policy, that
+  // must refuse the row.
+
+  it("rejects a document that references another tenant's customer", async () => {
+    await expect(
+      owner.document.create({
+        data: { tenantId: fx.tenantA, type: "INVOICE", contactId: fx.contactB },
+      }),
+    ).rejects.toThrow(/does not belong to tenant/i);
+  });
+
+  it("rejects a document derived from or replacing another tenant's document", async () => {
+    const docB = await owner.document.create({
+      data: { tenantId: fx.tenantB, type: "INVOICE" },
+    });
+
+    await expect(
+      owner.document.create({
+        data: {
+          tenantId: fx.tenantA,
+          type: "INVOICE",
+          sourceDocumentId: docB.id,
+        },
+      }),
+    ).rejects.toThrow(/does not belong to tenant/i);
+
+    await expect(
+      owner.document.create({
+        data: {
+          tenantId: fx.tenantA,
+          type: "INVOICE",
+          replacementOfId: docB.id,
+        },
+      }),
+    ).rejects.toThrow(/does not belong to tenant/i);
+  });
+
+  it("rejects a document line whose parent document is in another tenant", async () => {
+    const docB = await owner.document.create({
+      data: { tenantId: fx.tenantB, type: "INVOICE" },
+    });
+
+    await expect(
+      owner.documentLine.create({
+        data: {
+          tenantId: fx.tenantA,
+          documentId: docB.id,
+          position: 1,
+          description: "forged cross-tenant line",
+          quantity: "1",
+          unitPrice: "1",
+          lineTotal: "1",
+          lineNet: "1",
+        },
+      }),
+    ).rejects.toThrow(/not a document of tenant/i);
+  });
+
+  it("rejects a document line that references another tenant's item", async () => {
+    const [docA, itemB] = await Promise.all([
+      owner.document.create({
+        data: { tenantId: fx.tenantA, type: "INVOICE" },
+      }),
+      owner.item.create({
+        data: { tenantId: fx.tenantB, name: "Item B", unitPrice: "1" },
+      }),
+    ]);
+
+    await expect(
+      owner.documentLine.create({
+        data: {
+          tenantId: fx.tenantA,
+          documentId: docA.id,
+          position: 1,
+          description: "forged item link",
+          itemId: itemB.id,
+          quantity: "1",
+          unitPrice: "1",
+          lineTotal: "1",
+          lineNet: "1",
+        },
+      }),
+    ).rejects.toThrow(/does not belong to tenant/i);
+  });
+
+  it("rejects a customer-specific price that mixes tenants", async () => {
+    await expect(
+      owner.contactItem.create({
+        data: {
+          tenantId: fx.tenantA,
+          contactId: fx.contactB,
+          itemId: fx.itemA,
+          agreedPrice: "0",
+        },
+      }),
+    ).rejects.toThrow(/does not belong to this tenant/i);
+  });
+
+  it("rejects a tax rate under another tenant's tax category", async () => {
+    const categoryB = await owner.taxCategory.create({
+      data: { tenantId: fx.tenantB, name: "VAT" },
+    });
+
+    await expect(
+      owner.taxRate.create({
+        data: {
+          tenantId: fx.tenantA,
+          categoryId: categoryB.id,
+          name: "Forged 10%",
+          rate: "0.1000",
+        },
+      }),
+    ).rejects.toThrow(/does not belong to this tenant/i);
+  });
+
+  it("binds a portal seat to at most one customer per tenant", async () => {
+    // The portal "membership" is the Contact whose `portalUserId` is the seat.
+    // The database allows one such contact per tenant, so a seat cannot be
+    // quietly re-pointed at a second customer's documents.
+    await owner.contact.create({
+      data: {
+        tenantId: fx.tenantA,
+        type: "INDIVIDUAL",
+        firstName: "Portal One",
+        portalUserId: fx.portal,
+      },
+    });
+
+    await expect(
+      owner.contact.create({
+        data: {
+          tenantId: fx.tenantA,
+          type: "INDIVIDUAL",
+          firstName: "Portal Two",
+          portalUserId: fx.portal,
+        },
+      }),
+    ).rejects.toThrow();
+  });
 });
