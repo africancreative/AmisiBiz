@@ -49,7 +49,7 @@ A6 = `../agent-6-pdf-portal-gap-analysis.md`.
 | 12  | Customer portal       | PARTIAL                     | Explicit linkage (`Contact.portalUserId` + portal role, one account ↔ one customer, per-request re-check, audited grant/revoke). **Link-based sharing model awaits the technical-lead ruling (A6 §3.4)**; portal UI localization gaps (UX V3).                                                                                                                                                                                                                                                  |
 | 13  | Audit                 | SATISFIED (delivery caveat) | AuditLog across admin + financial actions; admin audit panels; append-only document events. 4 audit columns are shell-only (C1 carries them).                                                                                                                                                                                                                                                                                                                                                   |
 | 14  | Security              | PARTIAL                     | **NO-GO stands (A7 §6): C1 + H1 (catalog 42 vs 57 seeds + matrix drift) + H2 (Subscription RLS absent).** No unresolved critical exposure otherwise: no injection surface, 30/33 isolation proofs, validated uploads, private serving routes, server-side authorization throughout (A7 §4, UX §1).                                                                                                                                                                                              |
-| 15  | Deployment            | OPEN                        | No deploy performed; no production approval (none may be presumed). Migration path broken until C1 closes; env template documents 5 of 18 runtime keys (A7 L1); deployment target unconfirmed (§4).                                                                                                                                                                                                                                                                                             |
+| 15  | Deployment            | OPEN                        | No deploy performed; no production approval (none may be presumed). Migration path broken until C1 closes; env template now documents all runtime keys incl. the Neon injected-key aliases (2026-10-18, #86); deployment target unconfirmed (§4).                                                                                                                                                                                                                                                |
 
 ## 2. Sequenced backlog (Steps 3–10)
 
@@ -77,8 +77,10 @@ everything not blocked.
    `DATABASE_URL_UNPOOLED[_2]`, `DATABASE_URL[_2]`) — is folded into item 4
    as a designed change, with the standing caveat that owner-credential
    fallbacks are RLS-inert and dev-only; runtime requires
-   `APP_DATABASE_URL`. _(Awaiting owner go-ahead: it rejects peer-agent work
-   on a shared tree.)_
+   `APP_DATABASE_URL`. **RESOLVED 2026-10-18 by owner ruling ("We are using
+   the neon database so remove any supabase implementation"): executed as
+   atomic revert `608a0f4`; post-revert gates green (type-check 10/10, tests
+   538 passed/33 skipped, supabase sweep clean).**
 
 1. R5 ruling: drop vs reform `Subscription*` (owner; blocks the completion
    migration's content).
@@ -87,10 +89,17 @@ everything not blocked.
    `passwordHash`, audit columns, 17 branding columns — plus RLS policies for
    whatever remains. Offline-verify first (throwaway cluster: deploy 21→new,
    checks battery, RLS battery, empty diff). _(Blocked by 1.)_
-3. Fix M2: format the two red files; re-run the full gate. _(Unblocked — first
-   code change after this document is approved.)_
+3. Fix M2: format the two red files; re-run the full gate. **DONE 2026-10-18
+   — `6db97d8` (format-only reflow; full gate re-executed green).**
 4. Resolve env authority for R1: which instance is the matrix's "Neon
-   database"; refresh `.env.example` to cover all 18 runtime keys. _(Needs §4.)_
+   database" (owner decision — §4 unchanged); refresh `.env.example` to all
+   runtime keys. **Template work DONE 2026-10-18 — #86 (this commit):**
+   `.env.example` now documents every runtime key including
+   `STRICT_APP_ROLE` and `TEST_DATABASE_URL`, and the Neon injected-key
+   cascade is implemented in `@amisibiz/database` (pooled-preferred fixed
+   order, unpooled injections stand in for `DIRECT_URL`, empty keys treated
+   as absent, messages never echo values; `APP_DATABASE_URL` still wins at
+   runtime and the production `STRICT_APP_ROLE` refusal is unchanged).
 
 **Step 4 — Tenant security**
 

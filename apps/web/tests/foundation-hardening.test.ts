@@ -18,6 +18,11 @@ const MANAGED = [
   "NODE_ENV",
   "EMAIL_PROVIDER",
   "DATABASE_URL",
+  "DATABASE_URL_2",
+  "POSTGRES_PRISMA_URL",
+  "POSTGRES_PRISMA_URL_2",
+  "POSTGRES_URL",
+  "POSTGRES_URL_2",
   "REDIS_URL",
   "UPSTASH_REDIS_REST_URL",
   "UPSTASH_REDIS_REST_TOKEN",
@@ -88,6 +93,29 @@ describe("getAuthSecret", () => {
 });
 
 describe("getCapabilities", () => {
+  it("reports the database configured through a platform-injected Neon key", () => {
+    delEnv("DATABASE_URL");
+    setEnv(
+      "POSTGRES_PRISMA_URL",
+      "postgresql://owner:pw@ep-pooler.eu-central-1.aws.neon.tech/amisibiz",
+    );
+    const capabilities = getCapabilities();
+    expect(capabilities.database.configured).toBe(true);
+    // The detail names the KEY, never the value.
+    expect(capabilities.database.detail).toContain("POSTGRES_PRISMA_URL");
+    expect(capabilities.database.detail).not.toContain("owner:pw");
+  });
+
+  it("reports the database unconfigured when no pooled URL exists under any key", () => {
+    delEnv("DATABASE_URL");
+    delEnv("DATABASE_URL_2");
+    delEnv("POSTGRES_PRISMA_URL");
+    delEnv("POSTGRES_PRISMA_URL_2");
+    delEnv("POSTGRES_URL");
+    delEnv("POSTGRES_URL_2");
+    expect(getCapabilities().database.configured).toBe(false);
+  });
+
   it("reports email as not configured without a provider", () => {
     delEnv("EMAIL_PROVIDER");
     const capabilities = getCapabilities();

@@ -105,6 +105,15 @@ describe("@amisibiz/documents", () => {
 });
 
 describe("@amisibiz/database", () => {
+  /** Wipes every pooled URL key so resolution is deterministic. */
+  function withoutPooledUrls(): Record<string, string | undefined> {
+    const overrides: Record<string, string | undefined> = {};
+    for (const key of database.POOLED_DATABASE_URL_KEYS) {
+      overrides[key] = undefined;
+    }
+    return overrides;
+  }
+
   it("reports missing DATABASE_URL by name", () => {
     const problems = database.collectDatabaseEnvProblems({});
     expect(problems.length).toBeGreaterThanOrEqual(1);
@@ -132,12 +141,87 @@ describe("@amisibiz/database", () => {
     );
   });
 
-  it("lazy accessors name the missing variable", () => {
-    withEnv({ DATABASE_URL: undefined }, () => {
+  it("accepts a platform-injected Neon key in place of DATABASE_URL", () => {
+    const problems = database.collectDatabaseEnvProblems({
+      POSTGRES_PRISMA_URL:
+        "postgresql://owner:pw@ep-pooler.eu-central-1.aws.neon.tech/amisibiz?sslmode=require",
+    });
+    expect(problems).toEqual([]);
+  });
+
+  it("prefers the canonical pooled key over injected aliases, in a fixed order", () => {
+    expect(
+      database.resolvePooledDatabaseUrl({
+        DATABASE_URL: "postgresql://canonical",
+        POSTGRES_PRISMA_URL: "postgresql://injected",
+      }),
+    ).toEqual({ url: "postgresql://canonical", source: "DATABASE_URL" });
+
+    expect(
+      database.resolvePooledDatabaseUrl({
+        POSTGRES_URL: "postgresql://pooled",
+        POSTGRES_PRISMA_URL: "postgresql://injected",
+      })?.source,
+    ).toBe("POSTGRES_PRISMA_URL");
+  });
+
+  it("treats empty injected keys as absent", () => {
+    expect(
+      database.resolvePooledDatabaseUrl({
+        DATABASE_URL: "   ",
+        POSTGRES_URL: "postgresql://pooled",
+      })?.source,
+    ).toBe("POSTGRES_URL");
+    // All pooled keys empty → still a problem, still named.
+    const problems = database.collectDatabaseEnvProblems({ DATABASE_URL: "" });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("DATABASE_URL");
+  });
+
+  it("maps unpooled injections to the direct endpoint without overriding DIRECT_URL", () => {
+    expect(
+      database.resolveDirectDatabaseUrl({
+        DIRECT_URL: "postgresql://direct",
+        DATABASE_URL_UNPOOLED: "postgresql://unpooled",
+      })?.source,
+    ).toBe("DIRECT_URL");
+    expect(
+      database.resolveDirectDatabaseUrl({
+        DATABASE_URL_UNPOOLED: "postgresql://unpooled",
+        POSTGRES_URL_NON_POOLING: "postgresql://nonpooling",
+      })?.source,
+    ).toBe("DATABASE_URL_UNPOOLED");
+  });
+
+  it("getDatabaseUrl falls back to an injected pooled key and names its source", () => {
+    withEnv(
+      { ...withoutPooledUrls(), POSTGRES_URL: "postgresql://injected" },
+      () => {
+        expect(database.getDatabaseUrl()).toBe("postgresql://injected");
+        expect(database.getDatabaseUrlSource()).toBe("POSTGRES_URL");
+      },
+    );
+  });
+
+  it("lazy accessors name the missing variable and every key they checked", () => {
+    withEnv(withoutPooledUrls(), () => {
       expect(() => database.getDatabaseUrl()).toThrowError(
         /DATABASE_URL is not configured/,
       );
+      expect(() => database.getDatabaseUrl()).toThrowError(
+        /POSTGRES_PRISMA_URL/,
+      );
     });
+  });
+
+  it("keeps connection-string values out of validation messages", () => {
+    const problems = database.collectDatabaseEnvProblems({
+      DATABASE_URL: "not-a-url:owner-password-here",
+      POSTGRES_URL: "junk",
+    });
+    const joined = problems.join("\n");
+    expect(joined).toContain("POSTGRES_URL");
+    expect(joined).not.toContain("owner-password-here");
   });
 });
 

@@ -6,9 +6,14 @@
  * delivery, private object storage or distributed rate limiting is operational
  * when it is not (see docs/implementation/agent-work-plan.md P0).
  *
- * Every accessor is lazy and pure over `process.env`, so importing this module
- * is always safe and it can be used from a readiness probe.
+ * Every accessor is lazy, so importing this module is always safe and it can
+ * be used from a readiness probe. Database detection delegates to
+ * `@amisibiz/database` so the injected-key list has one source of truth
+ * (this module stays server-only: it transitively references the Prisma
+ * client).
  */
+
+import { resolvePooledDatabaseUrl } from "@amisibiz/database";
 
 export type ServiceMode = "production" | "development" | "none";
 
@@ -34,13 +39,14 @@ function isProduction(): boolean {
 }
 
 function databaseCapability(): ServiceCapability {
-  const configured = Boolean(process.env.DATABASE_URL?.trim());
+  // Key NAME only in the detail line — a connection string embeds a password.
+  const resolved = resolvePooledDatabaseUrl();
   return {
-    configured,
-    mode: configured ? (isProduction() ? "production" : "development") : "none",
-    detail: configured
-      ? "Neon PostgreSQL connection configured."
-      : "DATABASE_URL is not configured.",
+    configured: resolved !== null,
+    mode: resolved ? (isProduction() ? "production" : "development") : "none",
+    detail: resolved
+      ? `Neon PostgreSQL connection configured (via ${resolved.source}).`
+      : "No pooled database URL is configured (checked DATABASE_URL and the platform-injected Neon keys).",
   };
 }
 

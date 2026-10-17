@@ -59,9 +59,13 @@ export function emailVerificationRequired(): boolean {
 /**
  * Secret used for signing session cookies and tokens.
  *
- * Supports explicit AUTH_SECRET (min 32 chars), common hosting provider
- * aliases (NEXTAUTH_SECRET, JWT_SECRET), or resilient server-side database
- * credential derivations on platforms like Vercel with Neon.
+ * Only an explicit `AUTH_SECRET` (min 32 chars) is accepted. In production a
+ * missing or short secret refuses to boot; outside production a fixed
+ * development placeholder keeps local setup frictionless — sessions signed
+ * with it are worthless outside the developer's machine. There are NO hosting
+ * alias fallbacks (NEXTAUTH_SECRET / JWT_SECRET) and the secret is never
+ * derived from database credentials: a signing key must stay independent of
+ * infrastructure secrets that rotate or leak together.
  */
 export function getAuthSecret(): string {
   const explicit = process.env.AUTH_SECRET?.trim();
