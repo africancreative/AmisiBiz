@@ -15,6 +15,7 @@ const i18nMiddleware = createMiddleware(routing);
 const protectedRoutePatterns = [
   /^\/[a-z]{2}\/app(\/|$)/,
   /^\/[a-z]{2}\/admin(\/|$)/,
+  /^\/[a-z]{2}\/portal(\/|$)/,
   /^\/[a-z]{2}\/dashboard/,
   /^\/[a-z]{2}\/settings/,
   /^\/[a-z]{2}\/team/,

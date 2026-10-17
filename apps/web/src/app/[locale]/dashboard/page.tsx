@@ -18,6 +18,10 @@ export default async function DashboardPage({
     redirect(`/${locale}/admin`);
   }
 
+  if (membership?.role === "CUSTOMER_PORTAL_USER") {
+    redirect(`/${locale}/portal`);
+  }
+
   const t = await getTranslations("dashboard");
   const tNav = await getTranslations("nav");
   const tTeam = await getTranslations("team");
