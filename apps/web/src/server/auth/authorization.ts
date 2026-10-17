@@ -114,6 +114,8 @@ async function resolvePlatformClaims(userId: string): Promise<{
   platformRole: PlatformRole | null;
   status: string;
 }> {
+  enterScope(sessionScope(userId));
+
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { platformRole: true, status: true },
@@ -165,6 +167,7 @@ export async function resolveTenantContext(
   tenantId: string,
 ): Promise<TenantAuthzContext> {
   assertActorMatchesAmbientScope(userId);
+  enterScope(sessionScope(userId));
 
   const membership = await prisma.tenantMember.findUnique({
     where: { tenantId_userId: { tenantId, userId } },
@@ -407,6 +410,7 @@ export async function authorizePlatform(
   permission: Permission,
 ): Promise<PlatformAuthzContext> {
   assertActorMatchesAmbientScope(userId);
+  enterScope(sessionScope(userId));
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -444,6 +448,7 @@ export async function authorizePlatform(
   // reads the actor's row, not from a claimed workspace.
   const scope = sessionScope(userId, {
     isPlatformAdmin: platformRole === "SUPER_ADMIN",
+    isPlatformSupport: platformRole === "SUPPORT",
   });
   enterScope(scope);
 
