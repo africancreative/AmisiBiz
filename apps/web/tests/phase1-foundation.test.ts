@@ -105,45 +105,36 @@ describe("@amisibiz/documents", () => {
 });
 
 describe("@amisibiz/database", () => {
-  it("reports every missing Supabase variable at once, by name", () => {
-    const problems = database.collectSupabaseEnvProblems({});
-    expect(problems).toHaveLength(3);
+  it("reports missing DATABASE_URL by name", () => {
+    const problems = database.collectDatabaseEnvProblems({});
+    expect(problems.length).toBeGreaterThanOrEqual(1);
     const joined = problems.join("\n");
-    expect(joined).toContain("NEXT_PUBLIC_SUPABASE_URL");
-    expect(joined).toContain("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
-    expect(joined).toContain("SUPABASE_SECRET_KEY");
+    expect(joined).toContain("DATABASE_URL");
   });
 
-  it("rejects an invalid URL with a clear message", () => {
-    const problems = database.collectSupabaseEnvProblems({
-      NEXT_PUBLIC_SUPABASE_URL: "not a url",
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_x",
-      SUPABASE_SECRET_KEY: "sb_secret_x",
+  it("rejects an invalid DATABASE_URL with a clear message", () => {
+    const problems = database.collectDatabaseEnvProblems({
+      DATABASE_URL: "not-a-valid-url",
     });
-    expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("NEXT_PUBLIC_SUPABASE_URL");
-    expect(problems[0]).toContain("valid URL");
+    expect(problems.length).toBeGreaterThanOrEqual(1);
+    expect(problems[0]).toContain("DATABASE_URL");
+    expect(problems[0]).toContain("valid PostgreSQL connection URL");
   });
 
-  it("requireSupabaseEnv throws one aggregated error naming the variables", () => {
-    expect(() => database.requireSupabaseEnv({})).toThrowError(
-      /NEXT_PUBLIC_SUPABASE_URL/,
-    );
-    expect(() => database.requireSupabaseEnv({})).toThrowError(
-      /SUPABASE_SECRET_KEY/,
-    );
-    const parsed = database.requireSupabaseEnv({
-      NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
-      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_x",
-      SUPABASE_SECRET_KEY: "sb_secret_x",
+  it("requireDatabaseEnv throws one aggregated error naming missing variables", () => {
+    expect(() => database.requireDatabaseEnv({})).toThrowError(/DATABASE_URL/);
+    const parsed = database.requireDatabaseEnv({
+      DATABASE_URL: "postgresql://user:pass@ep-test.neon.tech/amisibiz?sslmode=require",
     });
-    expect(parsed.NEXT_PUBLIC_SUPABASE_URL).toBe("https://example.supabase.co");
+    expect(parsed.DATABASE_URL).toBe(
+      "postgresql://user:pass@ep-test.neon.tech/amisibiz?sslmode=require",
+    );
   });
 
   it("lazy accessors name the missing variable", () => {
-    withEnv({ SUPABASE_SECRET_KEY: undefined }, () => {
-      expect(() => database.getSupabaseSecretKey()).toThrowError(
-        /SUPABASE_SECRET_KEY is not configured/,
+    withEnv({ DATABASE_URL: undefined }, () => {
+      expect(() => database.getDatabaseUrl()).toThrowError(
+        /DATABASE_URL is not configured/,
       );
     });
   });

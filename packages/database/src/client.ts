@@ -7,7 +7,7 @@ import { PrismaClient } from "@prisma/client";
  * interchangeable:
  *
  *  - `DATABASE_URL` is the *owner/administrator* connection used by Prisma CLI
- *    work (`migrate`, `db seed`). On Supabase that is the `postgres` role, which
+ *    work (`migrate`, `db seed`). That is the administrator role, which
  *    bypasses row-level security and holds every privilege. Application code has
  *    no business using it: a single forgotten `where` clause would read across
  *    tenants and nothing in the database would object.

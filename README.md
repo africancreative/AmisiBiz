@@ -16,7 +16,7 @@ apps/
 packages/
   auth/       @amisibiz/auth      roles, permission matrix, session contracts
   config/     @amisibiz/config    shared tsconfig bases + ESLint flat config
-  database/   @amisibiz/database  Prisma singleton, Supabase admin client, env guards
+  database/   @amisibiz/database  Prisma singleton, database scoping, env guards
   domain/     @amisibiz/domain    pure validation/contrast logic (client-safe)
   documents/  @amisibiz/documents money formatting, series, PDF contracts
   sync/       @amisibiz/sync      offline operation/conflict contracts (design-only)
@@ -32,9 +32,9 @@ the future Capacitor/Tauri clients can import the same code.
 
 - **Next.js 15** (App Router) + **React 19** + **TypeScript** (strict, shared config in `@amisibiz/config`)
 - **Tailwind CSS** with a semantic design-token layer
-- **Supabase Auth** (`@supabase/ssr`) — GoTrue sessions with a server-side
-  freshness check (`User.sessionVersion` vs. the access-token claim)
-- **Prisma 6** + PostgreSQL (Supabase)
+- **Authentication** — bcrypt + HMAC-SHA256 signed HTTP-only cookies with server-side
+  freshness and session validation (`User.sessionVersion`)
+- **Prisma 6** + **Neon PostgreSQL**
 - **Zod** validation, **Vitest** tests
 - **next-intl** — English (`/en`), French (`/fr`), Swahili (`/sw`)
 - **Turborepo** task graph; **pnpm** workspaces
@@ -43,7 +43,7 @@ the future Capacitor/Tauri clients can import the same code.
 
 - Node.js 20+ (developed on Node 24; CI uses Node 24)
 - pnpm 11+ (pinned via `packageManager` in the root `package.json`; `corepack enable` or a standalone install)
-- A PostgreSQL database (Supabase or local)
+- A PostgreSQL database (Neon or local)
 - Optional, for the client shells: JDK 17 + Android SDK (mobile — see [`apps/mobile/README.md`](apps/mobile/README.md)); Rust toolchain + MSVC Build Tools (desktop — see [`apps/desktop/README.md`](apps/desktop/README.md))
 
 ## Setup
@@ -66,11 +66,9 @@ the future Capacitor/Tauri clients can import the same code.
    cp apps/web/.env.example apps/web/.env
    ```
 
-   At minimum set `DATABASE_URL`, `DIRECT_URL`, `NEXT_PUBLIC_SUPABASE_URL`,
-   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY`
-   (Supabase → Project Settings → API; the secret key is server-only and must
-   never reach the client bundle, logs or error messages). Never commit
-   `.env.local`.
+   At minimum set `DATABASE_URL`, `DIRECT_URL`, and `AUTH_SECRET` (generate a strong
+   32-character random secret; the secret key is server-only and must never reach
+   the client bundle, logs or error messages). Never commit `.env.local`.
 
    Tenant workspaces are served from `<slug>.<APP_BASE_DOMAIN>`; set
    `APP_BASE_DOMAIN` (and `NEXT_PUBLIC_APP_BASE_DOMAIN`) for hostname routing.
@@ -191,7 +189,7 @@ of it is implemented.
 
 ## Security rules (apply to all work)
 
-- `SUPABASE_SECRET_KEY` (`sb_secret_*`) and other privileged credentials must
+- `AUTH_SECRET`, database passwords and other privileged credentials must
   **never** appear in browser/mobile/desktop bundles, logs or error messages.
 - All authorization is server-side; never trust client-supplied tenant IDs,
   roles, prices, totals or statuses.

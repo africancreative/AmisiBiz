@@ -200,7 +200,7 @@ export async function rateLimit(
   options: RateLimitOptions,
 ): Promise<RateLimitResult> {
   // In development, do not lock out developers/administrators while testing
-  if (process.env.NODE_ENV !== "production" && process.env.ENABLE_DEV_RATE_LIMIT !== "true") {
+  if (process.env.NODE_ENV === "development" && process.env.ENABLE_DEV_RATE_LIMIT !== "true") {
     return {
       success: true,
       limit: options.limit,

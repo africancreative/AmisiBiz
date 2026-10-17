@@ -15,14 +15,6 @@ const nextConfig = {
     "@amisibiz/sync",
     "@amisibiz/ui",
   ],
-  images: {
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "*.supabase.co",
-      },
-    ],
-  },
   // i18n handled by next-intl middleware + plugin
   // NOTE: `experimental.typedRoutes` is intentionally disabled — locale-prefixed
   // dynamic hrefs (e.g. `/${locale}/dashboard`) are not expressible as typed

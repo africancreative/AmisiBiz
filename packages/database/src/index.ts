@@ -29,6 +29,4 @@ export {
   type PlatformClaims,
   type ScopedTx,
 } from "./scope";
-// Note: supabase-admin.ts is kept for reference but no longer exported.
-// Auth is handled directly via Prisma + bcrypt + HMAC cookie tokens.
 export type { Prisma } from "@prisma/client";
