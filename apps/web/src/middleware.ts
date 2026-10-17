@@ -1,11 +1,7 @@
 import createMiddleware from "next-intl/middleware";
 import { NextResponse, type NextRequest } from "next/server";
 import { routing } from "@/lib/i18n/routing";
-import {
-  createMiddlewareSupabase,
-  hasSupabaseAuthCookie,
-  type SupabaseCookieToSet,
-} from "@/lib/supabase/middleware";
+import { verifySessionToken } from "@/lib/auth/token";
 import {
   extractSubdomain,
   getBaseDomain,
@@ -77,16 +73,8 @@ function isStaticAsset(pathname: string): boolean {
   return STATIC_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
-/** Copies Set-Cookie state from the refresh into a gate redirect. */
-function redirectKeepingAuthCookies(
-  target: URL,
-  cookiesToSet: SupabaseCookieToSet[],
-): NextResponse {
-  const response = NextResponse.redirect(target);
-  cookiesToSet.forEach(({ name, value, options }) => {
-    response.cookies.set(name, value, options);
-  });
-  return response;
+function redirectTo(target: URL): NextResponse {
+  return NextResponse.redirect(target);
 }
 
 export default async function middleware(request: NextRequest) {
@@ -125,56 +113,11 @@ export default async function middleware(request: NextRequest) {
   const isLocaleRedirect =
     i18nResponse.status >= 300 && i18nResponse.status < 400;
 
-  // Supabase session refresh. Cookies Supabase rotates are collected here and
-  // applied to whichever response we end up returning — never dropped.
-  // Preview environments can be opened before Supabase is connected; keep
-  // public routes available instead of turning every request into a 500.
-  const hasSupabaseConfig = Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() &&
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim(),
-  );
-  const refreshedCookies: SupabaseCookieToSet[] = [];
-  const refreshedHeaders: Record<string, string> = {};
-  const supabase = hasSupabaseConfig
-    ? createMiddlewareSupabase(request, (cookiesToSet, headers) => {
-        refreshedCookies.push(...cookiesToSet);
-        Object.assign(refreshedHeaders, headers);
-      })
-    : null;
+  const token = request.cookies.get("amisibiz_session")?.value;
+  const session = token ? await verifySessionToken(token) : null;
+  const userId = session?.userId ?? null;
 
-  if (!supabase) {
-    if (isProtectedRoute(pathname)) {
-      const locale = pathname.split("/")[1] ?? "en";
-      const loginUrl = new URL(`/${locale}/login`, request.url);
-      loginUrl.searchParams.set("callbackUrl", pathname);
-      return NextResponse.redirect(loginUrl);
-    }
-    return i18nResponse;
-  }
-
-  let userId: string | null = null;
-  if (hasSupabaseAuthCookie(request)) {
-    try {
-      const { data } = await supabase.auth.getUser();
-      userId = data?.user?.id ?? null;
-    } catch (error) {
-      // Auth service unreachable/erroring: fail closed (anonymous).
-      console.error("[middleware] Supabase getUser failed:", error);
-      userId = null;
-    }
-  }
-
-  // Locale-normalisation redirect: no downstream render happens, so attach any
-  // refreshed cookies and return it.
-  if (isLocaleRedirect) {
-    refreshedCookies.forEach(({ name, value, options }) => {
-      i18nResponse.cookies.set(name, value, options);
-    });
-    Object.keys(refreshedHeaders).forEach((key) => {
-      i18nResponse.headers.set(key, refreshedHeaders[key] ?? "");
-    });
-    return i18nResponse;
-  }
+  if (isLocaleRedirect) return i18nResponse;
 
   // Route gating uses the freshly validated user. Revocation (session-version)
   // enforcement happens in server components/actions — this gate only keeps
@@ -184,32 +127,18 @@ export default async function middleware(request: NextRequest) {
   if (isProtectedRoute(pathname) && !userId) {
     const loginUrl = new URL(`/${locale}/login`, request.url);
     loginUrl.searchParams.set("callbackUrl", pathname);
-    return redirectKeepingAuthCookies(loginUrl, refreshedCookies);
+    return redirectTo(loginUrl);
   }
 
   if (isAuthOnlyRoute(pathname) && userId) {
-    return redirectKeepingAuthCookies(
-      new URL(`/${locale}/dashboard`, request.url),
-      refreshedCookies,
-    );
+    return redirectTo(new URL(`/${locale}/dashboard`, request.url));
   }
 
-  // Pass-through: build the response AFTER the refresh so the cookies it
-  // rotated are also visible to this render (request-override), not only to
-  // the next request.
-  const response = NextResponse.next({ request });
-  refreshedCookies.forEach(({ name, value, options }) => {
-    response.cookies.set(name, value, options);
-  });
-  Object.keys(refreshedHeaders).forEach((key) => {
-    response.headers.set(key, refreshedHeaders[key] ?? "");
-  });
-  return response;
+  return NextResponse.next({ request });
 }
 
 export const config = {
-  // Run middleware on the Node.js runtime: the Supabase session refresh and
-  // @supabase/ssr cookie handling expect the server runtime.
+  // Run middleware on the Node.js runtime for database-backed session checks.
   runtime: "nodejs",
   // Match all pathnames except Next.js internals and static assets.
   matcher: ["/((?!_next/static|_next/image|favicon.ico|public/).*)"],

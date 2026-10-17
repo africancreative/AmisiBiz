@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import {
   prisma,
   enterScope,
@@ -6,8 +7,10 @@ import {
 } from "@amisibiz/database";
 import { isSessionValid, readSessionVersionClaim } from "@/lib/auth/session";
 import { currentRequestSessionUser } from "@/lib/auth/request-session";
-import { createServerSupabase } from "@/lib/supabase/server";
-import { isSupabaseConfigured } from "@amisibiz/database";
+import {
+  SESSION_COOKIE_NAME,
+  verifySessionToken,
+} from "@/lib/auth/token";
 import { emailVerificationRequired } from "@/lib/env";
 import type { AppSessionUser } from "@amisibiz/auth";
 
@@ -45,8 +48,9 @@ export type VerifiedAuthUser = {
 export async function resolveVerifiedSession(
   authUser: VerifiedAuthUser,
   accessToken: string | null,
+  tokenVersion?: number,
 ): Promise<AppSessionUser | null> {
-  const claimVersion = accessToken ? readSessionVersionClaim(accessToken) : -1; // absent token can never satisfy the check
+  const claimVersion = tokenVersion ?? (accessToken ? readSessionVersionClaim(accessToken) : -1);
 
   // Open the RLS scope for the rest of this request. This is the one place an
   // identity enters the system, so every read after this point is filtered by
@@ -81,9 +85,7 @@ export async function resolveVerifiedSession(
     return null;
   }
 
-  // Mirror the confirmation fact onto the profile once; best-effort — the
-  // authoritative value lives in Supabase Auth. Self-update of a cosmetic
-  // column, which both the `user_update` policy and `users_guard_update` allow.
+  // Mirror the confirmation fact onto the profile once; best-effort.
   if (!user.emailVerified && authUser.email_confirmed_at) {
     try {
       await prisma.user.update({
@@ -123,33 +125,41 @@ export async function resolveVerifiedSession(
  * Handlers, or null when the request is unauthenticated.
  *
  * Two sources, in order:
- * 1. A request-scoped bearer session, when the caller is running inside
- *    `runWithRequestSession` (the sync API — see `bearer-session.ts`).
- * 2. The Supabase auth cookie: `getUser()` validates the access token against
- *    Supabase Auth (network round trip; refreshes first when the token has
- *    expired), then `resolveVerifiedSession` applies the rest of the chain.
- *
- * Returns null when Supabase is not yet configured; preview environments can
- * be opened before the integration connects.
+  * 1. A request-scoped bearer session, when the caller is running inside
+  *    `runWithRequestSession` (the sync API — see `bearer-session.ts`).
+  * 2. The signed Neon-backed session cookie, then `resolveVerifiedSession`
+  *    applies the database-backed trust chain.
+
  */
 export async function getSessionUser(): Promise<AppSessionUser | null> {
   const bearer = currentRequestSessionUser();
   if (bearer !== undefined) return bearer;
 
-  if (!isSupabaseConfigured()) {
-    return null;
-  }
+  const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
+  const session = token ? await verifySessionToken(token) : null;
+  if (!session) return null;
 
-  const supabase = await createServerSupabase();
+  const user = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: {
+      id: true,
+      email: true,
+      emailVerified: true,
+      name: true,
+      platformRole: true,
+      status: true,
+      sessionVersion: true,
+    },
+  });
+  if (!user || !isSessionValid(user, session.sessionVersion)) return null;
 
-  const { data: userData, error: userError } = await supabase.auth.getUser();
-  const authUser = userData?.user;
-  if (userError || !authUser) return null;
-
-  // The raw access token (not the decoded user) carries the claim we compare
-  // against the authoritative database version.
-  const { data: sessionData } = await supabase.auth.getSession();
-  const accessToken = sessionData?.session?.access_token ?? null;
-
-  return resolveVerifiedSession(authUser, accessToken);
+  return resolveVerifiedSession(
+    {
+      id: user.id,
+      email: user.email,
+      email_confirmed_at: user.emailVerified?.toISOString() ?? null,
+    },
+    token ?? null,
+    session.sessionVersion,
+  );
 }
