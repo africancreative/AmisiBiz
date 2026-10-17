@@ -26,6 +26,12 @@ export const AUDIT_ACTIONS = {
   TENANT_ROLE_UPDATED: "team.roleUpdated",
   TENANT_MEMBER_REMOVED: "team.memberRemoved",
   TENANT_INVITATION_ACCEPTED: "team.invitationAccepted",
+  // Revocation and expiry complete the invitation lifecycle. The Phase 3 brief
+  // requires issuance, acceptance, expiry and revocation to be auditable; a
+  // PENDING invitation that quietly ages out or is withdrawn must leave the
+  // same kind of evidence an acceptance does.
+  TENANT_INVITATION_REVOKED: "team.invitationRevoked",
+  TENANT_INVITATION_EXPIRED: "team.invitationExpired",
   PLATFORM_TENANT_SUSPENDED: "platform.tenantSuspended",
   PLATFORM_TENANT_ACTIVATED: "platform.tenantActivated",
   PLATFORM_TENANT_REACTIVATED: "platform.tenantReactivated",
@@ -48,6 +54,13 @@ export const AUDIT_ACTIONS = {
   CONTACT_ITEM_CREATED: "contactItem.created",
   CONTACT_ITEM_UPDATED: "contactItem.updated",
   CONTACT_ITEM_REMOVED: "contactItem.removed",
+  // AGENT 4 — customer portal access management. A portal login exists only
+  // while one `Contact.portalUserId` link exists, so granting and revoking that
+  // link are the two events that decide who can see a business's documents.
+  // Metadata carries the opaque ids, never the customer's or the account holder's
+  // name or email address.
+  PORTAL_ACCESS_GRANTED: "portal.accessGranted",
+  PORTAL_ACCESS_REVOKED: "portal.accessRevoked",
   // Phase 05 — the document engine. A document is not edited after issuance;
   // these events record lifecycle *facts* (an issue, a void, a payment) rather
   // than field edits, which is the same distinction the audit trail draws for
@@ -89,6 +102,8 @@ export const AUDIT_ACTIONS = {
   PLATFORM_TENANT_NUMBERING_UPDATED: "platform.tenantNumberingUpdated",
   PLATFORM_TENANT_DOMAIN_UPDATED: "platform.tenantDomainUpdated",
   PLATFORM_TENANT_OWNER_ASSIGNED: "platform.tenantOwnerAssigned",
+  PLATFORM_TENANT_OWNER_INVITATION_REVOKED:
+    "platform.tenantOwnerInvitationRevoked",
   PLATFORM_TENANT_LOGO_UPLOADED: "platform.tenantLogoUploaded",
 } as const;
 

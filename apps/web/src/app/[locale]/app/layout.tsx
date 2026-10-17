@@ -14,7 +14,11 @@ import {
   ShieldIcon,
 } from "@amisibiz/ui/icons";
 import { getInitials } from "@/lib/utils";
-import { PERMISSIONS, tenantRoleHasPermission } from "@amisibiz/auth";
+import {
+  PERMISSIONS,
+  tenantRoleHasPermission,
+  type Permission,
+} from "@amisibiz/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +33,9 @@ export default async function WorkspaceLayout({
   const state = await getWorkspaceState(locale);
   const t = await getTranslations("workspace");
   const tNav = await getTranslations("nav");
+  // The three document shortcuts borrow the enum labels the documents list and the
+  // detail view already use, so a type is called the same thing everywhere.
+  const tDocType = await getTranslations("documentEnums.type");
 
   const brandNode = (
     <span className="flex min-w-0 items-center gap-2">
@@ -49,39 +56,100 @@ export default async function WorkspaceLayout({
     </span>
   );
 
+  /**
+   * The workspace navigation.
+   *
+   * Every entry is gated by the same permission its own page guard asks for, so a
+   * member is never offered a link that only leads to "access denied" — an
+   * operations manager sees Customers and Delivery notes, a finance member sees
+   * Invoices, and neither sees a settings page they cannot open.
+   *
+   * The three document shortcuts carry a query string, and `usePathname()` never
+   * returns one, so they are never the highlighted entry: the Documents link above
+   * them lights up for all of them. They are filters over one list, not separate
+   * destinations.
+   */
+  const can = (permission: Permission) =>
+    state.status === "ok" &&
+    tenantRoleHasPermission(state.context.role, permission);
+
+  const isSupportViewer =
+    state.status === "ok" && state.context.via === "support_grant";
+
   const items: NavItem[] = [
-    {
-      href: `/${locale}/app`,
-      label: t("nav.overview"),
-      icon: <HomeIcon />,
-      exact: true,
-    },
-    {
-      href: `/${locale}/app/contacts`,
-      label: t("nav.contacts"),
-      icon: <UsersIcon />,
-    },
-    {
-      href: `/${locale}/app/items`,
-      label: t("nav.items"),
-      icon: <PackageIcon />,
-    },
-    {
-      href: `/${locale}/app/documents`,
-      label: t("nav.documents"),
-      icon: <FileTextIcon />,
-    },
-    {
-      href: `/${locale}/app/settings/branding`,
-      label: t("nav.branding"),
-      icon: <SettingsIcon />,
-    },
-    // Only owners/admins hold `audit.read` (and a provider support grant, held
-    // read-only). The page guard still enforces it; hiding the entry just avoids
-    // offering a link that would immediately render "access denied".
-    ...(state.status === "ok" &&
-    (state.context.via === "support_grant" ||
-      tenantRoleHasPermission(state.context.role, PERMISSIONS.AUDIT_READ))
+    ...(can(PERMISSIONS.DOCUMENTS_READ)
+      ? [
+          {
+            href: `/${locale}/app`,
+            label: t("nav.overview"),
+            icon: <HomeIcon />,
+            exact: true,
+          },
+        ]
+      : []),
+    ...(can(PERMISSIONS.CONTACTS_READ)
+      ? [
+          {
+            href: `/${locale}/app/contacts`,
+            label: t("nav.contacts"),
+            icon: <UsersIcon />,
+          },
+        ]
+      : []),
+    ...(can(PERMISSIONS.ITEMS_READ)
+      ? [
+          {
+            href: `/${locale}/app/items`,
+            label: t("nav.items"),
+            icon: <PackageIcon />,
+          },
+        ]
+      : []),
+    ...(can(PERMISSIONS.DOCUMENTS_READ)
+      ? [
+          {
+            href: `/${locale}/app/documents`,
+            label: t("nav.documents"),
+            icon: <FileTextIcon />,
+          },
+          {
+            href: `/${locale}/app/documents?type=QUOTATION`,
+            label: tDocType("QUOTATION"),
+            icon: <FileTextIcon />,
+          },
+          {
+            href: `/${locale}/app/documents?type=INVOICE`,
+            label: tDocType("INVOICE"),
+            icon: <FileTextIcon />,
+          },
+          {
+            href: `/${locale}/app/documents?type=DELIVERY_NOTE`,
+            label: tDocType("DELIVERY_NOTE"),
+            icon: <FileTextIcon />,
+          },
+        ]
+      : []),
+    ...(can(PERMISSIONS.PORTAL_ACCESS_MANAGE)
+      ? [
+          {
+            href: `/${locale}/app/settings/portal`,
+            label: t("nav.portalAccess"),
+            icon: <ShieldIcon />,
+          },
+        ]
+      : []),
+    ...(can(PERMISSIONS.BUSINESS_SETTINGS_READ)
+      ? [
+          {
+            href: `/${locale}/app/settings/branding`,
+            label: t("nav.branding"),
+            icon: <SettingsIcon />,
+          },
+        ]
+      : []),
+    // A provider support grant holds no tenant role but reads the log it was
+    // granted for; hiding the entry from everyone else avoids a dead link.
+    ...(isSupportViewer || can(PERMISSIONS.AUDIT_READ)
       ? [
           {
             href: `/${locale}/app/settings/audit`,
@@ -90,12 +158,18 @@ export default async function WorkspaceLayout({
           },
         ]
       : []),
-    { href: `/${locale}/team`, label: t("nav.team"), icon: <UsersIcon /> },
-    {
-      href: `/${locale}/dashboard`,
-      label: t("nav.dashboard"),
-      icon: <HomeIcon />,
-    },
+    ...(can(PERMISSIONS.BUSINESS_MEMBERS_READ)
+      ? [
+          {
+            href: `/${locale}/team`,
+            label: t("nav.team"),
+            icon: <UsersIcon />,
+          },
+        ]
+      : []),
+    // `/dashboard` is not offered here: it is the landing route that decides which
+    // area a signed-in user belongs in (platform admin, customer portal, or this
+    // workspace) and then forwards. Overview is the dashboard.
   ];
 
   const footer =

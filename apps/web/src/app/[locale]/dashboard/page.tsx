@@ -1,10 +1,35 @@
 import { redirect } from "next/navigation";
-import { getTranslations } from "next-intl/server";
 import { requireAuth, getPrimaryMembership } from "@/lib/auth/helpers";
-import { SignOutButton } from "@/components/auth/sign-out-button";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The landing route a signed-in user is sent to.
+ *
+ * This page decides which area an account belongs in and forwards there. It
+ * renders nothing, on purpose: the dashboard the AGENT 4 workspace asks for is
+ * the overview at `/app`, which re-authorizes through `getWorkspaceState`, hides
+ * every action the caller's role does not permit, and lives inside the workspace
+ * shell next to the navigation that gates itself the same way. A second page
+ * here — printing the tenant's slug, status enum, currency and timezone straight
+ * off the membership row — would be a weaker copy of that overview whose
+ * permission rules someone had to remember separately, and it would be the one
+ * surface where they were not applied.
+ *
+ * So the only question answered here is "where does this account live":
+ *
+ * - A platform administrator with no workspace of their own goes to `/admin`.
+ *   An administrator who IS a member of a business keeps landing in that
+ *   business, exactly as before; the platform console is reached from its own
+ *   route, and it is guarded there.
+ * - A `CUSTOMER_PORTAL_USER` goes to `/portal` and never into the workspace.
+ *   That role holds no business permissions, so `/app` would refuse it anyway —
+ *   forwarding here means the customer is not shown a denial on the way to the
+ *   screen that is theirs.
+ * - Everyone else goes to their workspace overview — including a user with no
+ *   membership at all, whose `/app` guard explains the state in their own
+ *   language instead of this page guessing at a cause.
+ */
 export default async function DashboardPage({
   params,
 }: {
@@ -22,86 +47,5 @@ export default async function DashboardPage({
     redirect(`/${locale}/portal`);
   }
 
-  const t = await getTranslations("dashboard");
-  const tNav = await getTranslations("nav");
-  const tTeam = await getTranslations("team");
-
-  if (!membership) {
-    // A user should always have at least one membership after registering.
-    return (
-      <main className="mx-auto max-w-3xl px-4 py-12">
-        <div className="card p-6">
-          <p className="text-sm text-slate-600">
-            No organisation is associated with this account yet.
-          </p>
-        </div>
-      </main>
-    );
-  }
-
-  const { tenant, role } = membership;
-
-  return (
-    <main className="mx-auto max-w-5xl px-4 py-10">
-      <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            {t("welcome", {
-              name: session.user.name ?? session.user.email ?? "",
-            })}
-          </h1>
-          <p className="mt-1 text-sm text-slate-600">
-            {tenant.name} &middot; {tTeam(`roles.${role}`)}
-          </p>
-        </div>
-        <SignOutButton label={tNav("signOut")} />
-      </header>
-
-      <section className="grid gap-6 sm:grid-cols-2">
-        <div className="card p-6">
-          <h2 className="text-sm font-semibold text-slate-700">
-            {t("overview")}
-          </h2>
-          <dl className="mt-4 space-y-2 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-slate-500">Organisation</dt>
-              <dd className="font-medium text-slate-800">{tenant.name}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">Slug</dt>
-              <dd className="font-medium text-slate-800">{tenant.slug}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">Status</dt>
-              <dd className="font-medium text-slate-800">{tenant.status}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">Currency</dt>
-              <dd className="font-medium text-slate-800">{tenant.currency}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-slate-500">Timezone</dt>
-              <dd className="font-medium text-slate-800">{tenant.timezone}</dd>
-            </div>
-          </dl>
-        </div>
-
-        <div className="card p-6">
-          <h2 className="text-sm font-semibold text-slate-700">
-            {t("quickActions")}
-          </h2>
-          <ul className="mt-4 space-y-2 text-sm">
-            <li>
-              <a
-                href={`/${locale}/team`}
-                className="font-medium text-brand-700 hover:underline"
-              >
-                {tNav("team")}
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-    </main>
-  );
+  redirect(`/${locale}/app`);
 }
