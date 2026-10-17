@@ -59,6 +59,27 @@ everything not blocked.
 
 **Step 3 — Foundation**
 
+0. **P0 repair (added 2026-10-18, post-freeze): revert the three v0-agent
+   commits (`f82a3f4`, `8708189`, `d5d7b12`) that origin/main received
+   after the Step 1–2 freeze.** They do not compile (type-check: 9 errors —
+   imports of `@/lib/supabase/server` and `@/lib/supabase/middleware`, which
+   do not exist in the tree, plus five uses of the deleted
+   `requireDatabaseEnv`/`getDatabaseUrl` exports), and they silently revert
+   the Supabase removal: `packages/database/src/env.ts` lost the
+   `DATABASE_URL`/`DIRECT_URL`/`APP_DATABASE_URL` schema to a Supabase schema;
+   `session-user.ts` and `middleware.ts` were wholesale replaced with the
+   pre-`2fff426` Supabase auth stack (native signed-cookie resolution gone;
+   `getSessionUser` returns null without Supabase env); `/portal` was dropped
+   from middleware-protected routes. No Supabase dependency exists in
+   `package.json`. The one forward-compatible idea — `client.ts`'s cascade of
+   Neon-integration injected keys (`POSTGRES_PRISMA_URL[_2]`,
+   `POSTGRES_URL[_2]`, `POSTGRES_URL_NON_POOLING[_2]`,
+   `DATABASE_URL_UNPOOLED[_2]`, `DATABASE_URL[_2]`) — is folded into item 4
+   as a designed change, with the standing caveat that owner-credential
+   fallbacks are RLS-inert and dev-only; runtime requires
+   `APP_DATABASE_URL`. _(Awaiting owner go-ahead: it rejects peer-agent work
+   on a shared tree.)_
+
 1. R5 ruling: drop vs reform `Subscription*` (owner; blocks the completion
    migration's content).
 2. Write the C1 completion migration: replace the five comment-only shells by
