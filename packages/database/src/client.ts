@@ -40,10 +40,18 @@ function resolveScopedUrl(): string {
   // already owns the canonical name. Accept the injected Neon connection as a
   // development fallback while APP_DATABASE_URL remains the production target.
   const ownerUrl = [
+    // Neon is injected with suffixed names when another database integration
+    // already owns the canonical variable. Prefer the pooled URL for request
+    // traffic, then fall back through the equivalent Neon aliases.
     process.env.DATABASE_URL,
     process.env.DATABASE_URL_2,
+    process.env.POSTGRES_PRISMA_URL,
+    process.env.POSTGRES_PRISMA_URL_2,
     process.env.POSTGRES_URL,
     process.env.POSTGRES_URL_NON_POOLING,
+    process.env.POSTGRES_URL_NON_POOLING_2,
+    process.env.DATABASE_URL_UNPOOLED,
+    process.env.DATABASE_URL_UNPOOLED_2,
   ]
     .map((value) => value?.trim())
     .find(Boolean);
