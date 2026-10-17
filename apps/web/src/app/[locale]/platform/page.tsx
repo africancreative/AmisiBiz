@@ -1,8 +1,9 @@
 import { requireAuth } from "@/lib/auth/helpers";
-import { prisma } from "@amisibiz/database";
+import { prisma, runInScope } from "@amisibiz/database";
 import {
   authorizePlatform,
   AuthorizationError,
+  type PlatformAuthzContext,
 } from "@/server/auth/authorization";
 import { PERMISSIONS } from "@amisibiz/auth";
 import { TenantLifecycleActions } from "@/components/platform/tenant-lifecycle-actions";
@@ -23,8 +24,12 @@ export default async function PlatformPage({
 
   // Platform authorization is a separate domain from tenant authorization.
   // Denied users get a generic, non-enumerating message.
+  let context: PlatformAuthzContext;
   try {
-    await authorizePlatform(session.user.id, PERMISSIONS.PLATFORM_TENANTS_READ);
+    context = await authorizePlatform(
+      session.user.id,
+      PERMISSIONS.PLATFORM_TENANTS_READ,
+    );
   } catch (err) {
     if (err instanceof AuthorizationError) {
       return (
@@ -38,16 +43,20 @@ export default async function PlatformPage({
     throw err;
   }
 
-  const tenants = await prisma.tenant.findMany({
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      status: true,
-      createdAt: true,
-    },
-  });
+  // A Server Component render does not inherit the scope `authorizePlatform`
+  // entered (via `enterWith`), so scope the read explicitly with `runInScope`.
+  const tenants = await runInScope(context.scope, () =>
+    prisma.tenant.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        status: true,
+        createdAt: true,
+      },
+    }),
+  );
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">

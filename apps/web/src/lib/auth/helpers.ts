@@ -1,5 +1,5 @@
 import { getSessionUser, type AppSessionUser } from "@/lib/auth/session-user";
-import { prisma } from "@amisibiz/database";
+import { prisma, runInScope, sessionScope } from "@amisibiz/database";
 import { redirect } from "next/navigation";
 import type { PlatformRole, TenantRole } from "@prisma/client";
 
@@ -58,26 +58,33 @@ export async function getTenantMembership(userId: string, tenantId: string) {
 /**
  * Returns the user's default (or earliest) tenant membership, used to resolve
  * the active tenant for dashboard and team screens.
+ *
+ * Runs inside its own `sessionScope(userId)` via `runInScope`. It cannot rely on
+ * the scope `getSessionUser()` opened: that runs after `await`s, and
+ * `enterWith()` only reaches the caller when it is called before the first
+ * `await`, so the ambient scope is gone by the time this query would run.
  */
 export async function getPrimaryMembership(userId: string) {
-  return prisma.tenantMember.findFirst({
-    where: { userId },
-    orderBy: [{ isDefault: "desc" }, { joinedAt: "asc" }],
-    include: {
-      tenant: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          status: true,
-          currency: true,
-          timezone: true,
-          locale: true,
-          planId: true,
+  return runInScope(sessionScope(userId), () =>
+    prisma.tenantMember.findFirst({
+      where: { userId },
+      orderBy: [{ isDefault: "desc" }, { joinedAt: "asc" }],
+      include: {
+        tenant: {
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            status: true,
+            currency: true,
+            timezone: true,
+            locale: true,
+            planId: true,
+          },
         },
       },
-    },
-  });
+    }),
+  );
 }
 
 /**

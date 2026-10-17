@@ -4,10 +4,11 @@ import {
   getPrimaryMembership,
   TENANT_ROLE_RANK,
 } from "@/lib/auth/helpers";
-import { prisma } from "@amisibiz/database";
+import { prisma, runInScope } from "@amisibiz/database";
 import {
   authorizeTenant,
   AuthorizationError,
+  type TenantAuthzContext,
 } from "@/server/auth/authorization";
 import { PERMISSIONS, tenantRoleHasPermission } from "@amisibiz/auth";
 import { InviteMemberForm } from "@/components/team/invite-member-form";
@@ -52,15 +53,14 @@ export default async function TeamPage({
 
   const tenantId = primary.tenant.id;
 
-  let actorRole: TenantRole;
+  let context: TenantAuthzContext;
   try {
     // Server-side authorization: membership + tenant status + read permission.
-    const ctx = await authorizeTenant(
+    context = await authorizeTenant(
       session.user.id,
       tenantId,
       PERMISSIONS.BUSINESS_MEMBERS_READ,
     );
-    actorRole = ctx.role;
   } catch (err) {
     if (err instanceof AuthorizationError) {
       return (
@@ -74,6 +74,7 @@ export default async function TeamPage({
     throw err;
   }
 
+  const actorRole = context.role;
   const actorRank = TENANT_ROLE_RANK[actorRole];
   const canManage = tenantRoleHasPermission(
     actorRole,
@@ -85,20 +86,26 @@ export default async function TeamPage({
   );
   const assignableRoles = invitableRoles;
 
-  const [members, invitations] = await Promise.all([
-    prisma.tenantMember.findMany({
-      where: { tenantId },
-      orderBy: { joinedAt: "asc" },
-      include: {
-        user: { select: { id: true, name: true, email: true } },
-      },
-    }),
-    prisma.invitation.findMany({
-      where: { tenantId, status: "PENDING" },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, email: true, role: true, expiresAt: true },
-    }),
-  ]);
+  // Run inside the authorized tenant scope: `authorizeTenant` opens the scope
+  // with `enterScope()` (i.e. `AsyncLocalStorage.enterWith()`), which does not
+  // reach a Server Component render that awaits it, so the follow-up reads have
+  // to be scoped explicitly with `runInScope`.
+  const [members, invitations] = await runInScope(context.scope, () =>
+    Promise.all([
+      prisma.tenantMember.findMany({
+        where: { tenantId },
+        orderBy: { joinedAt: "asc" },
+        include: {
+          user: { select: { id: true, name: true, email: true } },
+        },
+      }),
+      prisma.invitation.findMany({
+        where: { tenantId, status: "PENDING" },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, email: true, role: true, expiresAt: true },
+      }),
+    ]),
+  );
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">

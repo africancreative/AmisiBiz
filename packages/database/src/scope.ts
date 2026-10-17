@@ -114,10 +114,12 @@ export class ScopeNotSetError extends Error {
     super(
       [
         `Database operation "${operation}" was attempted outside a request scope.`,
-        "Authorize the actor and open a scope first: runInScope(tenantScope(...), ...) for",
-        "a unit of work, or enterScope(sessionScope(userId)) at the point where the session",
-        "is resolved. This check exists so a missing authorization can never be masked by",
-        "an empty RLS result.",
+        "Authorize the actor and open a scope first: wrap the unit of work in",
+        "runInScope(scope, fn) — e.g. runInScope(context.scope, () => prisma.foo.findMany(...)).",
+        "Prefer runInScope over enterScope: enterScope's enterWith() only reaches the caller",
+        "when it runs before the caller's first await, so it does not survive the awaits in a",
+        "session lookup or authorization check. This check exists so a missing authorization",
+        "can never be masked by an empty RLS result.",
       ].join(" "),
     );
     this.name = "ScopeNotSetError";
@@ -160,14 +162,21 @@ export function currentTransaction(): ScopedTx | null {
 }
 
 /**
- * Declares the ambient scope for the rest of the current request's async
- * execution. Used by the authorization helpers: once an actor has been
- * authorized, the Server Action or Server Component that follows inherits the
- * context instead of having to wrap every query by hand.
+ * Declares the ambient scope for the rest of the current async context. Used by
+ * the authorization helpers so that queries running immediately afterwards — or
+ * helpers that read the caller's scope — see the same context.
  *
- * `enterWith` only affects the current async context — one request, one server
- * action, one render — so two concurrent requests cannot see each other's
- * scope. An already-open interactive transaction is preserved.
+ * `enterWith` only affects the current async context, so two concurrent
+ * requests cannot see each other's scope, and an already-open interactive
+ * transaction is preserved.
+ *
+ * IMPORTANT: `enterWith` only propagates to a caller when it runs *before* the
+ * caller's first `await` in the same async frame. A helper that resolves a
+ * session or authorizes an actor necessarily `await`s first, so the scope it
+ * enters here does **not** reach the Server Component or Server Action that
+ * called it — React's Server Component renderer severs the async frame. Do not
+ * rely on this for work that runs after an `await`; wrap that work in
+ * `runInScope(scope, fn)` (i.e. `AsyncLocalStorage.run()`) instead.
  */
 export function enterScope(scope: DbScope): void {
   frames.enterWith({ scope, tx: frames.getStore()?.tx ?? null });

@@ -1,8 +1,9 @@
 import { requireAuth } from "@/lib/auth/helpers";
-import { prisma } from "@amisibiz/database";
+import { prisma, runInScope } from "@amisibiz/database";
 import {
   authorizePlatform,
   AuthorizationError,
+  type PlatformAuthzContext,
 } from "@/server/auth/authorization";
 import { PERMISSIONS } from "@amisibiz/auth";
 import { getTranslations } from "next-intl/server";
@@ -29,8 +30,12 @@ export default async function PlatformAuditPage({
   const { locale } = await params;
   const session = await requireAuth(locale);
 
+  let context: PlatformAuthzContext;
   try {
-    await authorizePlatform(session.user.id, PERMISSIONS.PLATFORM_AUDIT_READ);
+    context = await authorizePlatform(
+      session.user.id,
+      PERMISSIONS.PLATFORM_AUDIT_READ,
+    );
   } catch (err) {
     if (err instanceof AuthorizationError) {
       return (
@@ -44,10 +49,14 @@ export default async function PlatformAuditPage({
     throw err;
   }
 
-  const tenants = await prisma.tenant.findMany({
-    orderBy: { name: "asc" },
-    select: { id: true, name: true },
-  });
+  // A Server Component render does not inherit the scope `authorizePlatform`
+  // entered (via `enterWith`), so scope the read explicitly with `runInScope`.
+  const tenants = await runInScope(context.scope, () =>
+    prisma.tenant.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+  );
 
   const t = await getTranslations("audit");
 

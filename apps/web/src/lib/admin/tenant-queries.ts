@@ -1,4 +1,4 @@
-import { prisma } from "@amisibiz/database";
+import { prisma, runInScope } from "@amisibiz/database";
 import { getSessionUser } from "@/lib/auth/session-user";
 import { authorizePlatform } from "@/server/auth/authorization";
 import { PERMISSIONS, type Permission } from "@amisibiz/auth";
@@ -20,9 +20,9 @@ import type {
  */
 
 /**
- * Opens the platform read scope for the signed-in administrator.
+ * Runs a platform-console read model inside the administrator's RLS scope.
  *
- * Every read model below calls this itself rather than trusting the admin
+ * Every read model below authorizes itself rather than trusting the admin
  * layout's earlier `authorizePlatform()`. A layout and its page render in
  * different async execution contexts, so the ambient RLS scope the layout
  * entered is not guaranteed to reach the page's queries — and the scoped client
@@ -30,21 +30,30 @@ import type {
  * Re-authorizing here also means a read model can never be reached by a caller
  * that skipped the guard.
  *
+ * The work runs inside `runInScope` (i.e. `AsyncLocalStorage.run()`), not an
+ * `enterScope()` call before it. `enterScope` uses `enterWith()`, which only
+ * sets the store on the current async frame: called after an `await` — as
+ * resolving a session and authorizing both are — it never reaches the caller,
+ * so the query would run with no scope. `run()` scopes the whole callback and
+ * is unaffected by how many awaits precede it.
+ *
  * `permission` is a parameter because the console reads at two different
  * authorities: workspace administration (`platform.tenants.read`) and the audit
  * trail (`platform.audit.read`). A read model asks for the one it actually is,
  * so widening the console later cannot accidentally widen the audit view.
  */
-async function openPlatformReadScope(
+async function withPlatformReadScope<T>(
+  fn: () => Promise<T>,
   permission: Permission = PERMISSIONS.PLATFORM_TENANTS_READ,
-): Promise<void> {
+): Promise<T> {
   const user = await getSessionUser();
   if (!user) {
     throw new Error(
       "Platform read models require a signed-in platform administrator.",
     );
   }
-  await authorizePlatform(user.id, permission);
+  const context = await authorizePlatform(user.id, permission);
+  return runInScope(context.scope, () => fn());
 }
 
 export type TenantOverviewCounts = Record<TenantStatus, number> & {
@@ -52,26 +61,26 @@ export type TenantOverviewCounts = Record<TenantStatus, number> & {
 };
 
 export async function getTenantOverviewCounts(): Promise<TenantOverviewCounts> {
-  await openPlatformReadScope();
+  return withPlatformReadScope(async () => {
+    const grouped = await prisma.tenant.groupBy({
+      by: ["status"],
+      _count: { _all: true },
+    });
 
-  const grouped = await prisma.tenant.groupBy({
-    by: ["status"],
-    _count: { _all: true },
+    const counts: TenantOverviewCounts = {
+      PENDING: 0,
+      ACTIVE: 0,
+      SUSPENDED: 0,
+      total: 0,
+    };
+
+    for (const row of grouped) {
+      counts[row.status] = row._count._all;
+      counts.total += row._count._all;
+    }
+
+    return counts;
   });
-
-  const counts: TenantOverviewCounts = {
-    PENDING: 0,
-    ACTIVE: 0,
-    SUSPENDED: 0,
-    total: 0,
-  };
-
-  for (const row of grouped) {
-    counts[row.status] = row._count._all;
-    counts.total += row._count._all;
-  }
-
-  return counts;
 }
 
 export type RecentTenantChange = {
@@ -85,18 +94,18 @@ export type RecentTenantChange = {
 export async function getRecentTenantChanges(
   limit = 5,
 ): Promise<RecentTenantChange[]> {
-  await openPlatformReadScope();
-
-  return prisma.tenant.findMany({
-    orderBy: { updatedAt: "desc" },
-    take: limit,
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      status: true,
-      updatedAt: true,
-    },
+  return withPlatformReadScope(async () => {
+    return prisma.tenant.findMany({
+      orderBy: { updatedAt: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        status: true,
+        updatedAt: true,
+      },
+    });
   });
 }
 
@@ -149,112 +158,115 @@ export async function searchTenants(
     pageSize?: string | undefined;
   } = {},
 ): Promise<TenantListResult> {
-  await openPlatformReadScope();
+  return withPlatformReadScope(async () => {
+    const parsed = tenantSearchSchema.safeParse({
+      ...(raw.q ? { q: raw.q } : {}),
+      ...(raw.status ? { status: raw.status } : {}),
+      ...(raw.planId !== undefined && raw.planId !== ""
+        ? { planId: raw.planId }
+        : {}),
+      ...(raw.page ? { page: raw.page } : {}),
+      ...(raw.pageSize ? { pageSize: raw.pageSize } : {}),
+    });
 
-  const parsed = tenantSearchSchema.safeParse({
-    ...(raw.q ? { q: raw.q } : {}),
-    ...(raw.status ? { status: raw.status } : {}),
-    ...(raw.planId !== undefined && raw.planId !== ""
-      ? { planId: raw.planId }
-      : {}),
-    ...(raw.page ? { page: raw.page } : {}),
-    ...(raw.pageSize ? { pageSize: raw.pageSize } : {}),
-  });
+    // An unparseable filter (a forged status, a non-uuid plan) reads as "no filter"
+    // rather than throwing: the console still renders, and the form re-shows the
+    // submitted value so the operator can correct it.
+    const { q, status, planId, page, pageSize } = parsed.success
+      ? parsed.data
+      : tenantSearchSchema.parse({});
 
-  // An unparseable filter (a forged status, a non-uuid plan) reads as "no filter"
-  // rather than throwing: the console still renders, and the form re-shows the
-  // submitted value so the operator can correct it.
-  const { q, status, planId, page, pageSize } = parsed.success
-    ? parsed.data
-    : tenantSearchSchema.parse({});
+    const search = q?.trim();
 
-  const search = q?.trim();
-
-  const where: Prisma.TenantWhereInput = {
-    ...(status ? { status } : {}),
-    ...(planId === undefined
-      ? {}
-      : { planId: planId === "none" ? null : planId }),
-    ...(search
-      ? {
-          OR: [
-            { name: { contains: search, mode: "insensitive" } },
-            { slug: { contains: search, mode: "insensitive" } },
-          ],
-        }
-      : {}),
-  };
-
-  const [total, tenants] = await Promise.all([
-    prisma.tenant.count({ where }),
-    prisma.tenant.findMany({
-      where,
-      orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        status: true,
-        createdAt: true,
-        lastActivityAt: true,
-        lastSyncAt: true,
-        lastSyncErrorCode: true,
-        plan: { select: { id: true, code: true, name: true } },
-        domains: {
-          where: { isPrimary: true },
-          select: { hostname: true },
-          take: 1,
-        },
-        _count: { select: { members: true } },
-      },
-    }),
-  ]);
-
-  // One aggregate over exactly the ids on this page, using the
-  // (tenantId, createdAt DESC) index migration 11 added for it.
-  const ids = tenants.map((tenant) => tenant.id);
-
-  const latestAudit =
-    ids.length === 0
-      ? []
-      : await prisma.auditLog.groupBy({
-          by: ["tenantId"],
-          where: { tenantId: { in: ids } },
-          _max: { createdAt: true },
-        });
-
-  const lastAuditByTenant = new Map(
-    latestAudit.map((row) => [row.tenantId ?? "", row._max.createdAt ?? null]),
-  );
-
-  return {
-    rows: tenants.map((tenant) => ({
-      id: tenant.id,
-      name: tenant.name,
-      slug: tenant.slug,
-      status: tenant.status,
-      createdAt: tenant.createdAt,
-      primaryHostname: tenant.domains[0]?.hostname ?? null,
-      plan: tenant.plan
+    const where: Prisma.TenantWhereInput = {
+      ...(status ? { status } : {}),
+      ...(planId === undefined
+        ? {}
+        : { planId: planId === "none" ? null : planId }),
+      ...(search
         ? {
-            id: tenant.plan.id,
-            code: tenant.plan.code,
-            name: tenant.plan.name,
+            OR: [
+              { name: { contains: search, mode: "insensitive" } },
+              { slug: { contains: search, mode: "insensitive" } },
+            ],
           }
-        : null,
-      memberCount: tenant._count.members,
-      lastActivityAt: tenant.lastActivityAt,
-      lastSyncAt: tenant.lastSyncAt,
-      lastSyncErrorCode: tenant.lastSyncErrorCode,
-      lastRecordedActivityAt: lastAuditByTenant.get(tenant.id) ?? null,
-    })),
-    total,
-    page,
-    pageSize,
-    pageCount: Math.max(1, Math.ceil(total / pageSize)),
-  };
+        : {}),
+    };
+
+    const [total, tenants] = await Promise.all([
+      prisma.tenant.count({ where }),
+      prisma.tenant.findMany({
+        where,
+        orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          status: true,
+          createdAt: true,
+          lastActivityAt: true,
+          lastSyncAt: true,
+          lastSyncErrorCode: true,
+          plan: { select: { id: true, code: true, name: true } },
+          domains: {
+            where: { isPrimary: true },
+            select: { hostname: true },
+            take: 1,
+          },
+          _count: { select: { members: true } },
+        },
+      }),
+    ]);
+
+    // One aggregate over exactly the ids on this page, using the
+    // (tenantId, createdAt DESC) index migration 11 added for it.
+    const ids = tenants.map((tenant) => tenant.id);
+
+    const latestAudit =
+      ids.length === 0
+        ? []
+        : await prisma.auditLog.groupBy({
+            by: ["tenantId"],
+            where: { tenantId: { in: ids } },
+            _max: { createdAt: true },
+          });
+
+    const lastAuditByTenant = new Map(
+      latestAudit.map((row) => [
+        row.tenantId ?? "",
+        row._max.createdAt ?? null,
+      ]),
+    );
+
+    return {
+      rows: tenants.map((tenant) => ({
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        status: tenant.status,
+        createdAt: tenant.createdAt,
+        primaryHostname: tenant.domains[0]?.hostname ?? null,
+        plan: tenant.plan
+          ? {
+              id: tenant.plan.id,
+              code: tenant.plan.code,
+              name: tenant.plan.name,
+            }
+          : null,
+        memberCount: tenant._count.members,
+        lastActivityAt: tenant.lastActivityAt,
+        lastSyncAt: tenant.lastSyncAt,
+        lastSyncErrorCode: tenant.lastSyncErrorCode,
+        lastRecordedActivityAt: lastAuditByTenant.get(tenant.id) ?? null,
+      })),
+      total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(total / pageSize)),
+    };
+  });
 }
 
 export type TenantPlanOption = {
@@ -275,17 +287,17 @@ export type TenantPlanOption = {
  * absent from the table.
  */
 export async function listPlanOptions(): Promise<TenantPlanOption[]> {
-  await openPlatformReadScope();
-
-  return prisma.plan.findMany({
-    orderBy: [{ status: "asc" }, { sortOrder: "asc" }, { code: "asc" }],
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      description: true,
-      status: true,
-    },
+  return withPlatformReadScope(async () => {
+    return prisma.plan.findMany({
+      orderBy: [{ status: "asc" }, { sortOrder: "asc" }, { code: "asc" }],
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        description: true,
+        status: true,
+      },
+    });
   });
 }
 
@@ -308,30 +320,30 @@ export async function getTenantStatusHistory(
   tenantId: string,
   limit = 50,
 ): Promise<TenantStatusHistoryEntry[]> {
-  await openPlatformReadScope();
+  return withPlatformReadScope(async () => {
+    const rows = await prisma.tenantStatusHistory.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" },
+      take: Math.min(Math.max(limit, 1), 200),
+      select: {
+        id: true,
+        fromStatus: true,
+        toStatus: true,
+        reason: true,
+        createdAt: true,
+        changedBy: { select: { email: true } },
+      },
+    });
 
-  const rows = await prisma.tenantStatusHistory.findMany({
-    where: { tenantId },
-    orderBy: { createdAt: "desc" },
-    take: Math.min(Math.max(limit, 1), 200),
-    select: {
-      id: true,
-      fromStatus: true,
-      toStatus: true,
-      reason: true,
-      createdAt: true,
-      changedBy: { select: { email: true } },
-    },
+    return rows.map((row) => ({
+      id: row.id,
+      fromStatus: row.fromStatus,
+      toStatus: row.toStatus,
+      reason: row.reason,
+      createdAt: row.createdAt,
+      changedByLabel: row.changedBy?.email ?? null,
+    }));
   });
-
-  return rows.map((row) => ({
-    id: row.id,
-    fromStatus: row.fromStatus,
-    toStatus: row.toStatus,
-    reason: row.reason,
-    createdAt: row.createdAt,
-    changedByLabel: row.changedBy?.email ?? null,
-  }));
 }
 
 export type TenantAuditEntry = {
@@ -359,42 +371,42 @@ export async function getTenantAuditEvents(
   tenantId: string,
   options: { limit?: number; actions?: readonly string[] } = {},
 ): Promise<TenantAuditEntry[]> {
-  await openPlatformReadScope(PERMISSIONS.PLATFORM_AUDIT_READ);
+  return withPlatformReadScope(async () => {
+    const rows = await prisma.auditLog.findMany({
+      where: {
+        tenantId,
+        ...(options.actions?.length
+          ? { action: { in: [...options.actions] } }
+          : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: Math.min(Math.max(options.limit ?? 50, 1), 200),
+      select: {
+        id: true,
+        action: true,
+        resource: true,
+        resourceId: true,
+        createdAt: true,
+        metadata: true,
+        user: { select: { email: true } },
+      },
+    });
 
-  const rows = await prisma.auditLog.findMany({
-    where: {
-      tenantId,
-      ...(options.actions?.length
-        ? { action: { in: [...options.actions] } }
-        : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    take: Math.min(Math.max(options.limit ?? 50, 1), 200),
-    select: {
-      id: true,
-      action: true,
-      resource: true,
-      resourceId: true,
-      createdAt: true,
-      metadata: true,
-      user: { select: { email: true } },
-    },
-  });
-
-  return rows.map((row) => ({
-    id: row.id,
-    action: row.action,
-    resource: row.resource,
-    resourceId: row.resourceId,
-    createdAt: row.createdAt,
-    actorLabel: row.user?.email ?? null,
-    metadata:
-      row.metadata &&
-      typeof row.metadata === "object" &&
-      !Array.isArray(row.metadata)
-        ? (row.metadata as Record<string, unknown>)
-        : null,
-  }));
+    return rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      resource: row.resource,
+      resourceId: row.resourceId,
+      createdAt: row.createdAt,
+      actorLabel: row.user?.email ?? null,
+      metadata:
+        row.metadata &&
+        typeof row.metadata === "object" &&
+        !Array.isArray(row.metadata)
+          ? (row.metadata as Record<string, unknown>)
+          : null,
+    }));
+  }, PERMISSIONS.PLATFORM_AUDIT_READ);
 }
 
 export type TenantDetail = {
@@ -476,121 +488,121 @@ export type TenantBrandingDetail = {
 export async function getTenantDetail(
   tenantId: string,
 ): Promise<TenantDetail | null> {
-  await openPlatformReadScope();
+  return withPlatformReadScope(async () => {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        status: true,
+        country: true,
+        currency: true,
+        timezone: true,
+        locale: true,
+        planId: true,
+        plan: { select: { id: true, code: true, name: true, status: true } },
+        createdAt: true,
+        updatedAt: true,
+        activatedAt: true,
+        activatedById: true,
+        suspendedAt: true,
+        suspendedById: true,
+        suspensionReason: true,
+        lastActivityAt: true,
+        lastSyncAt: true,
+        lastSyncErrorCode: true,
+        domains: {
+          select: { hostname: true, isPrimary: true },
+          orderBy: [{ isPrimary: "desc" }, { hostname: "asc" }],
+        },
+        _count: { select: { members: true } },
+        documentNumberings: {
+          orderBy: { type: "asc" },
+          select: {
+            type: true,
+            prefix: true,
+            padding: true,
+            separator: true,
+            periodStyle: true,
+            fiscalStartMonth: true,
+          },
+        },
+        branding: {
+          select: {
+            displayName: true,
+            registeredName: true,
+            primaryColor: true,
+            secondaryColor: true,
+            accentColor: true,
+            primaryForeground: true,
+            logoUrl: true,
+            contactEmail: true,
+            contactPhone: true,
+            postalAddress: true,
+            physicalAddress: true,
+            website: true,
+            taxPin: true,
+            currency: true,
+            defaultFooter: true,
+            paymentInstructions: true,
+            documentLayout: true,
+          },
+        },
+        // Owner status for the "assign an initial tenant owner" panel: whether the
+        // seat is filled, and whether an invitation is already waiting. Both are
+        // read here so the console can tell the operator the truth instead of
+        // letting them issue a second invitation that overwrites the first.
+        members: {
+          where: { role: "TENANT_OWNER" },
+          select: { user: { select: { email: true } } },
+          take: 1,
+        },
+        invitations: {
+          where: { role: "TENANT_OWNER", status: "PENDING" },
+          select: { email: true },
+          take: 1,
+        },
+      },
+    });
 
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: tenantId },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      status: true,
-      country: true,
-      currency: true,
-      timezone: true,
-      locale: true,
-      planId: true,
-      plan: { select: { id: true, code: true, name: true, status: true } },
-      createdAt: true,
-      updatedAt: true,
-      activatedAt: true,
-      activatedById: true,
-      suspendedAt: true,
-      suspendedById: true,
-      suspensionReason: true,
-      lastActivityAt: true,
-      lastSyncAt: true,
-      lastSyncErrorCode: true,
-      domains: {
-        select: { hostname: true, isPrimary: true },
-        orderBy: [{ isPrimary: "desc" }, { hostname: "asc" }],
-      },
-      _count: { select: { members: true } },
-      documentNumberings: {
-        orderBy: { type: "asc" },
-        select: {
-          type: true,
-          prefix: true,
-          padding: true,
-          separator: true,
-          periodStyle: true,
-          fiscalStartMonth: true,
-        },
-      },
-      branding: {
-        select: {
-          displayName: true,
-          registeredName: true,
-          primaryColor: true,
-          secondaryColor: true,
-          accentColor: true,
-          primaryForeground: true,
-          logoUrl: true,
-          contactEmail: true,
-          contactPhone: true,
-          postalAddress: true,
-          physicalAddress: true,
-          website: true,
-          taxPin: true,
-          currency: true,
-          defaultFooter: true,
-          paymentInstructions: true,
-          documentLayout: true,
-        },
-      },
-      // Owner status for the "assign an initial tenant owner" panel: whether the
-      // seat is filled, and whether an invitation is already waiting. Both are
-      // read here so the console can tell the operator the truth instead of
-      // letting them issue a second invitation that overwrites the first.
-      members: {
-        where: { role: "TENANT_OWNER" },
-        select: { user: { select: { email: true } } },
-        take: 1,
-      },
-      invitations: {
-        where: { role: "TENANT_OWNER", status: "PENDING" },
-        select: { email: true },
-        take: 1,
-      },
-    },
+    if (!tenant) return null;
+
+    return {
+      id: tenant.id,
+      name: tenant.name,
+      slug: tenant.slug,
+      status: tenant.status,
+      country: tenant.country,
+      currency: tenant.currency,
+      timezone: tenant.timezone,
+      locale: tenant.locale,
+      planId: tenant.planId,
+      plan: tenant.plan
+        ? {
+            id: tenant.plan.id,
+            code: tenant.plan.code,
+            name: tenant.plan.name,
+            status: tenant.plan.status,
+          }
+        : null,
+      createdAt: tenant.createdAt,
+      updatedAt: tenant.updatedAt,
+      activatedAt: tenant.activatedAt,
+      activatedBy: tenant.activatedById,
+      suspendedAt: tenant.suspendedAt,
+      suspendedBy: tenant.suspendedById,
+      suspensionReason: tenant.suspensionReason,
+      domains: tenant.domains,
+      hostnames: tenant.domains.map((domain) => domain.hostname),
+      memberCount: tenant._count.members,
+      lastActivityAt: tenant.lastActivityAt,
+      lastSyncAt: tenant.lastSyncAt,
+      lastSyncErrorCode: tenant.lastSyncErrorCode,
+      numbering: tenant.documentNumberings,
+      branding: tenant.branding,
+      ownerEmail: tenant.members[0]?.user.email ?? null,
+      pendingOwnerInvitationEmail: tenant.invitations[0]?.email ?? null,
+    };
   });
-
-  if (!tenant) return null;
-
-  return {
-    id: tenant.id,
-    name: tenant.name,
-    slug: tenant.slug,
-    status: tenant.status,
-    country: tenant.country,
-    currency: tenant.currency,
-    timezone: tenant.timezone,
-    locale: tenant.locale,
-    planId: tenant.planId,
-    plan: tenant.plan
-      ? {
-          id: tenant.plan.id,
-          code: tenant.plan.code,
-          name: tenant.plan.name,
-          status: tenant.plan.status,
-        }
-      : null,
-    createdAt: tenant.createdAt,
-    updatedAt: tenant.updatedAt,
-    activatedAt: tenant.activatedAt,
-    activatedBy: tenant.activatedById,
-    suspendedAt: tenant.suspendedAt,
-    suspendedBy: tenant.suspendedById,
-    suspensionReason: tenant.suspensionReason,
-    domains: tenant.domains,
-    hostnames: tenant.domains.map((domain) => domain.hostname),
-    memberCount: tenant._count.members,
-    lastActivityAt: tenant.lastActivityAt,
-    lastSyncAt: tenant.lastSyncAt,
-    lastSyncErrorCode: tenant.lastSyncErrorCode,
-    numbering: tenant.documentNumberings,
-    branding: tenant.branding,
-    ownerEmail: tenant.members[0]?.user.email ?? null,
-    pendingOwnerInvitationEmail: tenant.invitations[0]?.email ?? null,
-  };
 }
