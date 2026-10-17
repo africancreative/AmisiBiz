@@ -7,7 +7,7 @@ import { PrismaClient } from "@prisma/client";
  * interchangeable:
  *
  *  - `DATABASE_URL` is the *owner/administrator* connection used by Prisma CLI
- *    work (`migrate`, `db seed`). On Supabase that is the `postgres` role, which
+ *    work (`migrate`, `db seed`). That is the administrator role, which
  *    bypasses row-level security and holds every privilege. Application code has
  *    no business using it: a single forgotten `where` clause would read across
  *    tenants and nothing in the database would object.
@@ -36,30 +36,14 @@ function resolveScopedUrl(): string {
   const appUrl = process.env[APP_DATABASE_URL_ENV]?.trim();
   if (appUrl) return appUrl;
 
-  // Neon variables can be suffixed by the platform when another integration
-  // already owns the canonical name. Accept the injected Neon connection as a
-  // development fallback while APP_DATABASE_URL remains the production target.
-  const ownerUrl = [
-    // Neon is injected with suffixed names when another database integration
-    // already owns the canonical variable. Prefer the pooled URL for request
-    // traffic, then fall back through the equivalent Neon aliases.
-    process.env.DATABASE_URL,
-    process.env.DATABASE_URL_2,
-    process.env.POSTGRES_PRISMA_URL,
-    process.env.POSTGRES_PRISMA_URL_2,
-    process.env.POSTGRES_URL,
-    process.env.POSTGRES_URL_NON_POOLING,
-    process.env.POSTGRES_URL_NON_POOLING_2,
-    process.env.DATABASE_URL_UNPOOLED,
-    process.env.DATABASE_URL_UNPOOLED_2,
-  ]
-    .map((value) => value?.trim())
-    .find(Boolean);
-
+  const ownerUrl =
+    process.env.DATABASE_URL?.trim() ||
+    process.env.POSTGRES_PRISMA_URL?.trim() ||
+    process.env.POSTGRES_URL?.trim();
   if (!ownerUrl) {
     throw new Error(
       [
-        `${APP_DATABASE_URL_ENV} is not configured (and no Neon database URL fallback exists).`,
+        `${APP_DATABASE_URL_ENV} is not configured (and no DATABASE_URL fallback exists).`,
         "The runtime needs the least-privilege application role, e.g.",
         `  ${APP_DATABASE_URL_ENV}="postgresql://amisibiz_app:<password>@<host>:<port>/postgres"`,
         "See apps/web/.env.example.",
