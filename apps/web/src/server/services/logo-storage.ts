@@ -6,6 +6,7 @@ import {
   LOGO_MAX_BYTES,
   LOGO_MAX_DIMENSION_PX,
 } from "@/lib/validations/branding";
+import { put } from "@vercel/blob";
 
 /**
  * Logo file validation and storage, shared by the tenant and provider upload
@@ -146,23 +147,47 @@ export interface StoredLogo {
 }
 
 /**
- * Writes verified logo bytes under the tenant's own folder and returns the URL
- * the serving route understands. The tenant id must already have been
- * authorised — this function never validates it, and it never reads the caller's
- * input as a path.
+ * Writes verified logo bytes to the configured storage backend and returns the
+ * URL the serving route understands.
+ *
+ * Storage strategy:
+ *  - Production (BLOB_READ_WRITE_TOKEN + AMISIBIZ_STORE_ID set): Vercel Blob —
+ *    durable, CDN-backed, works on serverless where the filesystem is read-only.
+ *    AMISIBIZ_STORE_ID targets the named store; BLOB_READ_WRITE_TOKEN is the
+ *    auth token auto-injected by Vercel when the store is linked to the project.
+ *  - Development / local: local filesystem under `uploads/` — zero config,
+ *    served by the /uploads API route.
+ *
+ * The tenant id must already have been authorised — this function never
+ * validates it, and it never reads the caller's input as a path.
  */
 export async function storeTenantLogo(
   tenantId: string,
   buffer: Buffer,
   mimeType: string,
 ): Promise<StoredLogo> {
-  warnIfStorageEnvironmentIsEphemeral();
+  const ext = EXTENSION_BY_MIME[mimeType] ?? "bin";
+  const fileName = `${randomBytes(16).toString("hex")}.${ext}`;
 
-  const fileName = `${randomBytes(16).toString("hex")}.${EXTENSION_BY_MIME[mimeType]}`;
+  if (process.env.BLOB_READ_WRITE_TOKEN || process.env.AMISIBIZ_STORE_ID) {
+    // ── Vercel Blob (production) ──────────────────────────────────────────
+    const pathname = `tenants/${tenantId}/logo/${fileName}`;
+    const blob = await put(pathname, buffer, {
+      access: "public",
+      contentType: mimeType,
+      addRandomSuffix: false,
+      ...(process.env.AMISIBIZ_STORE_ID
+        ? { storeId: process.env.AMISIBIZ_STORE_ID }
+        : {}),
+    });
+    return { fileName, logoUrl: blob.url };
+  }
+
+  // ── Local filesystem (development) ──────────────────────────────────────
+  warnIfStorageEnvironmentIsEphemeral();
   const uploadDir = join(process.cwd(), "uploads", "tenants", tenantId, "logo");
   await mkdir(uploadDir, { recursive: true });
   await writeFile(join(uploadDir, fileName), buffer, { mode: 0o640 });
-
   return {
     fileName,
     logoUrl: `/uploads/tenants/${tenantId}/logo/${fileName}`,
