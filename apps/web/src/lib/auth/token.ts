@@ -82,3 +82,70 @@ export async function verifySessionToken(
     return null;
   }
 }
+
+export const PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS = 60 * 60; // 1 hour
+
+export type PasswordResetTokenPayload = {
+  type: "password-reset";
+  userId: string;
+  sessionVersion: number;
+  exp: number;
+};
+
+export async function createPasswordResetToken(
+  payload: { userId: string; sessionVersion: number },
+  secret = getAuthSecret(),
+): Promise<string> {
+  const enc = new TextEncoder();
+  const data = JSON.stringify({
+    type: "password-reset",
+    userId: payload.userId,
+    sessionVersion: payload.sessionVersion,
+    exp: Math.floor(Date.now() / 1000) + PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS,
+  });
+  const dataB64 = Buffer.from(data, "utf8").toString("base64url");
+  const key = await getHmacKey(secret);
+  const signature = await crypto.subtle.sign("HMAC", key, enc.encode(dataB64));
+  const sigB64 = Buffer.from(signature).toString("base64url");
+  return `${dataB64}.${sigB64}`;
+}
+
+export async function verifyPasswordResetToken(
+  token: string,
+  secret = getAuthSecret(),
+): Promise<PasswordResetTokenPayload | null> {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 2) return null;
+    const [dataB64, sigB64] = parts;
+    if (!dataB64 || !sigB64) return null;
+
+    const enc = new TextEncoder();
+    const key = await getHmacKey(secret);
+    const sigBytes = Buffer.from(sigB64, "base64url");
+    const valid = await crypto.subtle.verify(
+      "HMAC",
+      key,
+      sigBytes,
+      enc.encode(dataB64),
+    );
+    if (!valid) return null;
+
+    const json = Buffer.from(dataB64, "base64url").toString("utf8");
+    const payload = JSON.parse(json) as PasswordResetTokenPayload;
+
+    if (
+      payload.type !== "password-reset" ||
+      !payload.userId ||
+      typeof payload.sessionVersion !== "number"
+    ) {
+      return null;
+    }
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}

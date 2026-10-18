@@ -91,6 +91,23 @@ function warnIfStorageEnvironmentIsEphemeral(): void {
   );
 }
 
+/**
+ * Returns BLOB_READ_WRITE_TOKEN or throws a clear configuration error.
+ * Vercel auto-injects this when a Blob store is linked to the project;
+ * on other hosts it must be set manually.
+ */
+function requireBlobToken(): string {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  if (!token) {
+    throw new Error(
+      "BLOB_READ_WRITE_TOKEN is not set. " +
+        "Link a Vercel Blob store to this project or set the variable manually. " +
+        "Without it logo uploads cannot be persisted in production.",
+    );
+  }
+  return token;
+}
+
 export function logoSizeProblem(size: number): string | null {
   if (size === 0 || size > LOGO_MAX_BYTES) {
     return "File must be between 1 byte and 5 MB";
@@ -171,11 +188,16 @@ export async function storeTenantLogo(
 
   if (process.env.BLOB_READ_WRITE_TOKEN || process.env.AMISIBIZ_STORE_ID) {
     // ── Vercel Blob (production) ──────────────────────────────────────────
+    // requireBlobToken() throws a descriptive error if the token is absent,
+    // which surfaces in the route's catch block with the real reason rather
+    // than a silent SDK failure.
+    const token = requireBlobToken();
     const pathname = `tenants/${tenantId}/logo/${fileName}`;
     const blob = await put(pathname, buffer, {
       access: "public",
       contentType: mimeType,
       addRandomSuffix: false,
+      token,
       ...(process.env.AMISIBIZ_STORE_ID
         ? { storeId: process.env.AMISIBIZ_STORE_ID }
         : {}),

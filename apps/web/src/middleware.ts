@@ -1,5 +1,5 @@
 import createMiddleware from "next-intl/middleware";
-import { NextResponse, type NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { routing } from "@/lib/i18n/routing";
 import { SESSION_COOKIE_NAME, verifySessionToken } from "@/lib/auth/token";
 import {
@@ -84,18 +84,42 @@ export default async function middleware(request: NextRequest) {
   }
 
   const baseDomain = getBaseDomain();
+  let tenantSubdomain: string | null = null;
+
   if (baseDomain) {
     const host = resolveRequestHost({
       host: request.headers.get("host"),
       forwardedHost: request.headers.get("x-forwarded-host"),
     });
     const subdomain = extractSubdomain(host, baseDomain);
+
+    // Reserved subdomains (admin, platform, api, …) are never tenant workspaces.
     if (subdomain && isReservedSubdomain(subdomain)) {
       return new NextResponse("Not found", { status: 404 });
     }
+
+    // Record the verified subdomain for downstream RSCs / Server Actions.
+    // Only the middleware reads and validates the Host — downstream code reads
+    // this header instead of touching Host or X-Forwarded-Host themselves.
+    tenantSubdomain = subdomain;
   }
 
-  const i18nResponse = i18nMiddleware(request);
+  // Clone the request so we can attach server-side-only headers. The request
+  // object itself is immutable; mutating headers returns a new Headers instance.
+  const requestHeaders = new Headers(request.headers);
+  if (tenantSubdomain) {
+    requestHeaders.set("x-tenant-subdomain", tenantSubdomain);
+  } else {
+    // Explicitly clear the header so that a request without a valid tenant
+    // subdomain can never accidentally inherit one injected by a client.
+    requestHeaders.delete("x-tenant-subdomain");
+  }
+
+  const requestWithTenantHeader = new NextRequest(request, {
+    headers: requestHeaders,
+  });
+
+  const i18nResponse = i18nMiddleware(requestWithTenantHeader);
   const isLocaleRedirect =
     i18nResponse.status >= 300 && i18nResponse.status < 400;
 

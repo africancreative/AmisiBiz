@@ -22,7 +22,10 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
   createSessionToken,
+  createPasswordResetToken,
 } from "@/lib/auth/token";
+import { sendPasswordResetEmail } from "@/lib/email/password-reset";
+import { getAppUrlOrNull } from "@/lib/env";
 import { appendAuditLog, recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
 import {
   rateLimit,
@@ -331,7 +334,7 @@ export async function registerAction(
  */
 export async function forgotPasswordAction(
   rawInput: unknown,
-  _locale = "en",
+  locale = "en",
 ): Promise<ActionResult> {
   const allowed = await enforceAuthRateLimit("forgot-password", 5, HOUR_MS);
   if (!allowed) {
@@ -344,10 +347,38 @@ export async function forgotPasswordAction(
   }
 
   const { email } = result.data;
+  const normalizedEmail = email.toLowerCase().trim();
 
   try {
-    const user = await findUserIdByEmail(email.toLowerCase().trim());
+    const user = await runInScope(bootstrapScope(), () =>
+      prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          status: true,
+          sessionVersion: true,
+        },
+      }),
+    );
+
     if (user && user.status === "ACTIVE") {
+      const token = await createPasswordResetToken({
+        userId: user.id,
+        sessionVersion: user.sessionVersion,
+      });
+
+      const baseUrl = getAppUrlOrNull() || "http://localhost:3000";
+      const resetUrl = `${baseUrl}/auth/callback?token=${encodeURIComponent(token)}&type=recovery&next=/${locale}/reset-password`;
+
+      await sendPasswordResetEmail({
+        to: user.email,
+        userName: user.name,
+        resetUrl,
+        locale,
+      });
+
       await recordAudit({
         action: AUDIT_ACTIONS.AUTH_PASSWORD_RESET_REQUESTED,
         userId: user.id,

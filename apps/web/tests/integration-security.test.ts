@@ -1121,7 +1121,7 @@ describeDb("database-backed authorization proofs (as amisibiz_app)", () => {
     const codeKeys = [...ALL_PERMISSIONS].sort();
 
     expect(dbKeys).toEqual(codeKeys);
-    expect(dbKeys.length).toBe(42);
+    expect(dbKeys.length).toBe(ALL_PERMISSIONS.length);
   });
 
   it("the role→permission matrix in code is the matrix in the database", async () => {

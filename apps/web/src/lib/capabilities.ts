@@ -51,7 +51,31 @@ function databaseCapability(): ServiceCapability {
 }
 
 function emailCapability(): ServiceCapability {
-  const provider = process.env.EMAIL_PROVIDER?.trim();
+  const provider = process.env.EMAIL_PROVIDER?.trim().toLowerCase();
+  const mailtrapKey =
+    process.env.MAILTRAP_TOKEN?.trim() ||
+    process.env.MAILTRAP_API_KEY?.trim() ||
+    (provider === "mailtrap" ? process.env.API_KEY?.trim() : undefined) ||
+    (!provider && process.env.API_KEY?.trim() ? process.env.API_KEY?.trim() : undefined);
+
+  if (
+    provider === "mailtrap" ||
+    (mailtrapKey && (!provider || provider === "mailtrap"))
+  ) {
+    if (mailtrapKey) {
+      return {
+        configured: true,
+        mode: isProduction() ? "production" : "development",
+        detail: "Mailtrap Email API configured (via Vercel integration).",
+      };
+    }
+    return {
+      configured: false,
+      mode: "none",
+      detail:
+        "EMAIL_PROVIDER=mailtrap is set but Mailtrap API key/token is not configured.",
+    };
+  }
 
   if (!provider) {
     return isProduction()

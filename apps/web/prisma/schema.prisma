@@ -163,6 +163,17 @@ model Tenant {
   documentStatusEvents DocumentStatusEvent[]
   documentNumberings   DocumentNumbering[]
   documentSequences    DocumentNumberSequence[]
+  // CRM & commerce (AGENT 02)
+  catalogueCategories  CatalogueCategory[]
+  tags                 Tag[]
+  itemImages           ItemImage[]
+  productVariants      ProductVariant[]
+  pipelines            Pipeline[]
+  pipelineStages       PipelineStage[]
+  leads                Lead[]
+  tasks                Task[]
+  activityEvents       ActivityEvent[]
+  shareLinks           ShareLink[]
   // Phase 06 server half: idempotency receipts for pushed operations, and the
   // tombstones a hard delete leaves behind so an offline device drops the row
   // instead of keeping a ghost.
@@ -465,6 +476,62 @@ enum ContactStatus {
   ARCHIVED
 }
 
+// ─── CRM / commerce types (AGENT 02) ─────────────────────────────────────────
+// Capture-channel vocabulary shared by leads and customers. `Contact.source`
+// reuses `LeadSource` deliberately: one vocabulary, not two that can drift.
+enum LeadSource {
+  WEB_FORM
+  REFERRAL
+  SOCIAL
+  CAMPAIGN
+  WALK_IN
+  PHONE
+  EMAIL
+  IMPORT
+  OTHER
+}
+
+// CONVERTED and LOST are terminal.
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  CONVERTED
+  LOST
+}
+
+// Shared by leads and tasks (TaskPriority = LeadPriority in the design spec).
+enum LeadPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ContactChannel {
+  PHONE
+  WHATSAPP
+  SMS
+  EMAIL
+  PORTAL
+  OTHER
+}
+
+// `ActivityEvent.eventType` is deliberately a String (open vocabulary —
+// LEAD_CREATED, ORDER_CREATED, MERGE_APPLIED, …) so future agents never have to
+// migrate an enum for every new event, unlike this closed set.
+enum ShareLinkKind {
+  PRODUCT
+  LEAD_FORM
+  ORDER_STATUS
+}
+
+// Catalogue variant availability. Kept separate from `ItemStatus`: a variant is
+// never ARCHIVED — archiving is an item-level decision.
+enum VariantStatus {
+  ACTIVE
+  INACTIVE
+}
+
 // ─── Tax configuration (explicit, not implicit) ───────────────────────────────
 
 model TaxCategory {
@@ -499,6 +566,7 @@ model TaxRate {
   category      TaxCategory    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   items         Item[]
   documentLines DocumentLine[]
+  variants      ProductVariant[]
 
   @@unique([tenantId, categoryId, name, effectiveFrom])
   @@index([tenantId])
@@ -529,6 +597,19 @@ model Contact {
   // never a device clock.
   revision    Int           @default(1)
 
+  // ── Capture channel & marketing consent (AGENT 02) ────────────────────────
+  // `source` reuses the LeadSource vocabulary; `sourceCampaign` is UTM text —
+  // campaign entities are AGENT 04 territory, no Campaign table exists here.
+  source            LeadSource      ?
+  sourceDetail      String?
+  sourceCampaign    String?
+  preferredChannel  ContactChannel?
+  marketingConsent  Boolean         @default(false)
+  marketingConsentAt DateTime?
+  // Merge survivor pointer: a merged-away contact keeps its row (never hard
+  // deleted), is set ARCHIVED, and points at the surviving contact here.
+  supersededById    String?         @db.Uuid
+
   // ── Customer-portal linkage ──────────────────────────────────────────────
   // A portal user is an ordinary `User` whose `TenantMember.role` is
   // CUSTOMER_PORTAL_USER. Linking that user here is the WHOLE of their access:
@@ -543,6 +624,16 @@ model Contact {
   contactItems ContactItem[]
   documents    Document[] // Future: document history
 
+  // ── CRM relations (AGENT 02) ─────────────────────────────────────────────
+  supersedes     Contact[]       @relation("ContactMerge")
+  supersededBy   Contact?        @relation("ContactMerge", fields: [supersededById], references: [id], onDelete: SetNull)
+  leads          Lead[]
+  convertedLeads Lead[]          @relation("LeadConvertedContact")
+  tasks          Task[]
+  contactTags    ContactTag[]
+  shareLinks     ShareLink[]
+  activityEvents ActivityEvent[]
+
   @@unique([tenantId, portalUserId])
   @@index([tenantId])
   @@index([tenantId, status])
@@ -550,6 +641,7 @@ model Contact {
   @@index([tenantId, phone])
   @@index([tenantId, companyName])
   @@index([tenantId, createdAt])
+  @@index([tenantId, source])
 }
 
 model ContactAddress {
@@ -582,6 +674,7 @@ enum ItemType {
 enum ItemStatus {
   ACTIVE
   INACTIVE
+  ARCHIVED
 }
 
 model Item {
@@ -596,6 +689,7 @@ model Item {
   unitPrice     Decimal    @db.Decimal(18, 4) // Minor-unit model: stored as major units with 4dp precision
   currency      String     @default("KES")
   taxRateId     String?    @db.Uuid
+  categoryId    String?    @db.Uuid
   notes         String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
@@ -603,16 +697,21 @@ model Item {
   // trigger (see Contact.revision).
   revision      Int        @default(1)
 
-  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  taxRate       TaxRate?       @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  taxRate       TaxRate?            @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  category      CatalogueCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   contactItems  ContactItem[]
   documentLines DocumentLine[]
+  images        ItemImage[]
+  variants      ProductVariant[]
+  shareLinks    ShareLink[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
   @@index([tenantId, status])
   @@index([tenantId, type])
   @@index([tenantId, name])
+  @@index([tenantId, categoryId])
 }
 
 // ─── Customer-specific item catalogue ─────────────────────────────────────────
@@ -672,6 +771,10 @@ enum DocumentType {
   QUOTATION
   INVOICE
   DELIVERY_NOTE
+  // Orders are `Document` rows of this type — not a new entity (design spec §0).
+  // ORDER uses the pre-existing statuses DRAFT, ISSUED, PARTIALLY_PAID, PAID,
+  // OVERDUE, CANCELLED, VOID; no new DocumentStatus values are needed.
+  ORDER
 }
 
 // The union of all three lifecycles. Which subset applies to a given type is
@@ -786,6 +889,11 @@ model Document {
   lines            DocumentLine[]
   payments         DocumentPayment[]
   statusEvents     DocumentStatusEvent[]
+  // ── CRM / commerce relations (AGENT 02)
+  convertedByLeads Lead[]                @relation("LeadConvertedDocument")
+  tasks            Task[]
+  activityEvents   ActivityEvent[]
+  shareLinks       ShareLink[]
 
   @@unique([tenantId, type, number])
   @@unique([tenantId, idempotencyKey])
@@ -807,6 +915,9 @@ model DocumentLine {
   // Provenance only — the printed line always comes from the snapshot columns
   // below, never from the current catalogue.
   itemId       String? @db.Uuid
+  // Variant provenance follows the same rule as `itemId`: snapshot columns remain
+  // the print authority.
+  variantId    String? @db.Uuid
   // For a delivery note, the source document line this line delivers against.
   sourceLineId String? @db.Uuid
 
@@ -836,12 +947,13 @@ model DocumentLine {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tenant     Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  document   Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  item       Item?          @relation(fields: [itemId], references: [id], onDelete: Restrict)
-  taxRateRef TaxRate?       @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
-  sourceLine DocumentLine?  @relation("DeliveryAgainst", fields: [sourceLineId], references: [id], onDelete: Restrict)
-  deliveries DocumentLine[] @relation("DeliveryAgainst")
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document   Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  item       Item?           @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  variant    ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  taxRateRef TaxRate?        @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  sourceLine DocumentLine?   @relation("DeliveryAgainst", fields: [sourceLineId], references: [id], onDelete: Restrict)
+  deliveries DocumentLine[]  @relation("DeliveryAgainst")
 
   @@unique([tenantId, documentId, position])
   @@index([tenantId])
@@ -946,6 +1058,330 @@ model DocumentNumberSequence {
   @@index([tenantId])
 }
 
+// ─── CRM & commerce (AGENT 02 Phase 1) ────────────────────────────────────────
+//
+// Leads/pipeline, tasks, the unified activity timeline, share links and the
+// catalogue extensions (categories, tags, images, variants). Governing rules
+// from the design spec:
+//
+//   - Orders are `Document` rows of type ORDER — there is no `Order` table here.
+//   - Public unauthenticated access happens only through SECURITY DEFINER
+//     functions (migration side); nothing anonymous reads these tables directly.
+//   - `ActivityEvent` is the single unified timeline: append-only, open
+//     vocabulary `eventType`, and `(tenantId, source, sourceKey)` uniqueness
+//     makes a retried write land once.
+//   - Duplicate detection never merges automatically; `Contact.supersededById`
+//     is set only by the explicit two-step merge action.
+//   - `ShareLink.token` is generated server-side (base62, ≥24 chars) and is a
+//     resource key, never a tenant-routing key.
+
+model CatalogueCategory {
+  id       String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String  @db.Uuid
+  name     String
+  parentId String? @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  parent   CatalogueCategory?  @relation("CatalogueCategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children CatalogueCategory[] @relation("CatalogueCategoryTree")
+  items    Item[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([tenantId, parentId])
+}
+
+model Tag {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String @db.Uuid
+  name     String
+
+  createdAt DateTime @default(now())
+
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contactTags ContactTag[]
+
+  // The migration additionally enforces case-insensitive uniqueness via a
+  // functional unique index on lower(name); Prisma cannot express that here.
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// Junction table: tenant isolation is enforced through both parents (Cascade),
+// so it carries no tenantId column of its own.
+model ContactTag {
+  contactId String   @db.Uuid
+  tagId     String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@index([tagId])
+}
+
+// Images are stored through the provider's Vercel Blob seam
+// (`lib/logo-storage.ts` pattern, `BLOB_READ_WRITE_TOKEN` fail-closed);
+// `blobUrl` is the resulting public blob read URL. No fake local storage.
+model ItemImage {
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId String @db.Uuid
+  itemId   String @db.Uuid
+  position Int
+  blobUrl  String
+  alt      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, itemId, position])
+  @@index([tenantId])
+  @@index([tenantId, itemId])
+}
+
+model ProductVariant {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String        @db.Uuid
+  itemId    String        @db.Uuid
+  name      String
+  sku       String?
+  unitPrice Decimal       @db.Decimal(18, 4) // Minor-unit model, as on Item
+  currency  String        @default("KES")
+  taxRateId String?       @db.Uuid
+  status    VariantStatus @default(ACTIVE)
+  position  Int           @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  item          Item           @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  taxRate       TaxRate?       @relation(fields: [taxRateId], references: [id], onDelete: SetNull)
+  documentLines DocumentLine[]
+
+  // Plain unique: Postgres treats NULLs as distinct, so variants without a SKU
+  // are unconstrained — the partial-index behaviour the spec asks for.
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([tenantId, itemId])
+}
+
+model Pipeline {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String    @db.Uuid
+  name      String
+  // One default per tenant, enforced in the migration by a partial unique
+  // `(tenantId) WHERE "isDefault" AND "archivedAt" IS NULL`.
+  isDefault Boolean   @default(false)
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stages PipelineStage[]
+
+  @@index([tenantId])
+}
+
+model PipelineStage {
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String  @db.Uuid
+  pipelineId String  @db.Uuid
+  name       String
+  position   Int
+  // Terminal markers for win/loss metrics — a stage is won, lost, or neither.
+  isWin      Boolean @default(false)
+  isLost     Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pipeline Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  leads    Lead[]
+
+  @@unique([tenantId, pipelineId, position])
+  @@index([tenantId])
+  @@index([tenantId, pipelineId])
+}
+
+model Lead {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String       @db.Uuid
+  status            LeadStatus   @default(NEW)
+  priority          LeadPriority @default(MEDIUM)
+  pipelineStageId   String?      @db.Uuid
+  assignedToUserId  String?      @db.Uuid
+  firstName         String?
+  lastName          String?
+  companyName       String?
+  email             String?
+  phone             String?
+  description       String?
+  currency          String       @default("KES")
+  estimatedValue    Decimal?     @db.Decimal(18, 4)
+  source            LeadSource
+  sourceDetail      String?
+  utmSource         String?
+  utmMedium         String?
+  utmCampaign       String?
+  // Existing-customer link (a lead that references a known contact).
+  contactId         String?      @db.Uuid
+  lostReason        String?
+  lostAt            DateTime?
+  convertedAt       DateTime?
+  convertedContactId  String?    @db.Uuid
+  // The quotation/order the conversion produced, when one was created.
+  convertedDocumentId String?    @db.Uuid
+  idempotencyKey    String?
+  externalId        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  // Monotonic server revision. Bumped by the `amisibiz_bump_revision` trigger on
+  // every UPDATE. It is the ordering authority an offline pull compares against,
+  // never a device clock. (Trigger arrives with migration 24.)
+  revision  Int      @default(1)
+
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pipelineStage     PipelineStage?   @relation(fields: [pipelineStageId], references: [id], onDelete: SetNull)
+  assignedToUser    User?            @relation(fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  contact           Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  convertedContact  Contact?         @relation("LeadConvertedContact", fields: [convertedContactId], references: [id], onDelete: SetNull)
+  convertedDocument Document?        @relation("LeadConvertedDocument", fields: [convertedDocumentId], references: [id], onDelete: SetNull)
+  tasks             Task[]
+  activityEvents    ActivityEvent[]
+
+  // "Prevent duplicate leads from retries": plain uniques — Postgres NULLS
+  // DISTINCT gives the partial-index behaviour the spec describes.
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, source, externalId])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, email])
+  @@index([tenantId, phone])
+}
+
+model Task {
+  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String        @db.Uuid
+  title       String
+  notes       String?
+  dueAt       DateTime?
+  completedAt DateTime?
+  // TaskPriority = LeadPriority (shared enum, per the design spec).
+  priority    LeadPriority  @default(MEDIUM)
+  assigneeId  String?       @db.Uuid
+  // A task always belongs to something: the migration-side CHECK requires at
+  // least one of leadId / contactId / documentId.
+  leadId      String?       @db.Uuid
+  contactId   String?       @db.Uuid
+  documentId  String?       @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  // Monotonic server revision, maintained by the `amisibiz_bump_revision`
+  // trigger (see Lead.revision; trigger arrives with migration 24).
+  revision  Int      @default(1)
+
+  tenant   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignee User?          @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  lead     Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  contact  Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  document Document?      @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  activityEvents ActivityEvent[]
+
+  @@index([tenantId])
+  @@index([tenantId, dueAt])
+  @@index([tenantId, contactId])
+  @@index([tenantId, leadId])
+}
+
+// Unified activity timeline. APPEND-ONLY: no `updatedAt` by design — the
+// migration grants SELECT+INSERT only and a BEFORE UPDATE/DELETE trigger
+// refuses writes, mirroring `document_status_event_is_append_only`.
+model ActivityEvent {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @db.Uuid
+  // Open vocabulary: LEAD_CREATED, ORDER_CREATED, MERGE_APPLIED, …
+  eventType   String
+  occurredAt  DateTime @default(now())
+  actorId     String?  @db.Uuid
+  leadId      String?  @db.Uuid
+  contactId   String?  @db.Uuid
+  documentId  String?  @db.Uuid
+  taskId      String?  @db.Uuid
+  shareLinkId String?  @db.Uuid
+  payload     Json?
+  // Retry-dedup identity: a writer names itself (`source`) and keys the exact
+  // mutation (`sourceKey`); the unique index below makes a retry land once.
+  source      String?
+  sourceKey   String?
+
+  createdAt DateTime @default(now())
+
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor     User?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  lead      Lead?       @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  contact   Contact?    @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  document  Document?   @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  task      Task?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  shareLink ShareLink?  @relation(fields: [shareLinkId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, source, sourceKey])
+  @@index([tenantId])
+  @@index([tenantId, occurredAt])
+  @@index([tenantId, contactId])
+  @@index([tenantId, leadId])
+  @@index([tenantId, documentId])
+}
+
+// Public share links (`/s/[token]`). The token resolves server-side to this
+// row, which carries the tenantId — share links are a resource route, never
+// tenant routing. Partial per-kind uniques are enforced in the migration
+// ((tenantId,itemId) WHERE PRODUCT AND active; (tenantId,documentId) WHERE
+// ORDER_STATUS AND active).
+model ShareLink {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String         @db.Uuid
+  kind        ShareLinkKind
+  // 26-char base62, generated server-side, never client-supplied.
+  token       String         @unique
+  itemId      String?        @db.Uuid
+  documentId  String?        @db.Uuid
+  active      Boolean        @default(true)
+  expiresAt   DateTime?
+  message     String?
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  // Bumped only by the public resolver function (retry double-count tolerated
+  // and documented — no client-supplied attribution).
+  viewCount   Int            @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  item   Item?  @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  document Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  activityEvents ActivityEvent[]
+
+  @@index([tenantId])
+  @@index([tenantId, kind])
+}
+
 // ─── User profile (identity authority: native credentials) ────────────────────────
 
 // Identity authority is this table. Credentials are native: `passwordHash`
@@ -987,6 +1423,10 @@ model User {
   syncOperations        SyncOperation[]
   // Contacts this user may read through the customer portal (usually at most one).
   portalContacts        Contact[]             @relation("ContactPortalAccess")
+  // CRM & commerce (AGENT 02): lead ownership, task assignment, timeline actor.
+  leadsAssigned         Lead[]
+  tasksAssigned         Task[]
+  activityEvents        ActivityEvent[]
 
   @@index([email])
   @@index([platformRole])

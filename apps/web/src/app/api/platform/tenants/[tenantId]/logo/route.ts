@@ -126,9 +126,10 @@ export async function POST(
 
     return NextResponse.json({ success: true, data: { logoUrl } });
   } catch (err) {
-    console.error("[POST /api/platform/tenants/[tenantId]/logo]", err);
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[POST /api/platform/tenants/[tenantId]/logo] Upload error:", message, err);
     return NextResponse.json(
-      { success: false, error: "Upload failed" },
+      { success: false, error: `Upload failed: ${message}` },
       { status: 500 },
     );
   }
