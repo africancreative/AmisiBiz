@@ -52,6 +52,17 @@ enum PlanStatus {
   ARCHIVED
 }
 
+/// Billing state of a tenant subscription. Independent of `Tenant.status`
+/// (lifecycle: PENDING/ACTIVE/SUSPENDED). Reform (R5, owner ruling 2026-10-18):
+/// replaces the free-text column this enum was written to constrain.
+enum SubscriptionStatus {
+  ACTIVE
+  PAUSED
+  TRIAL
+  CANCELLED
+  ARCHIVED
+}
+
 enum UserStatus {
   ACTIVE
   INACTIVE
@@ -204,26 +215,31 @@ model Plan {
  * confirmation from a browser‐initiated response.  Status changes come from
  * verified provider events or a controlled reconciliation process.
  *
- * The `app_subscription_accepts_writes()` RLS policy mirrors this: a
- * subscription in TRIAL or PAUSED mode still allows reads, but writes are
- * governed by the tenant's `Tenant.status` gate.
+ * The RLS policies mirror this: reads are tenant-scoped (a workspace can see
+ * its own billing state from any status); writes are platform-admin only
+ * (`is_platform_admin()`), the history table is append-only, and no DELETE
+ * grant exists for the runtime role — subscriptions end as ARCHIVED, not
+ * deleted.
  */
 model Subscription {
-  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId          String     @db.Uuid // Unique: one subscription per tenant
-  planId            String     @db.Uuid // Plan from the catalogue
-  status            String     // ACTIVE, PAUSED, TRIAL, CANCELLED, ARCHIVED
-  current_period_start DateTime? // Start of the current billing period
-  current_period_end   DateTime? // End of the current billing period
-  trial_start         DateTime? // When the trial period began (if any)
-  trial_end           DateTime? // When the trial period ends (if any)
-  cancel_at_period_end Boolean   @default(false)
-  canceled_at         DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId           String             @db.Uuid // Unique: one subscription per tenant
+  planId             String             @db.Uuid // Plan from the catalogue
+  status             SubscriptionStatus // ACTIVE, PAUSED, TRIAL, CANCELLED, ARCHIVED
+  currentPeriodStart DateTime? // Start of the current billing period
+  currentPeriodEnd   DateTime? // End of the current billing period
+  trialStart         DateTime? // When the trial period began (if any)
+  trialEnd           DateTime? // When the trial period ends (if any)
+  cancelAtPeriodEnd  Boolean            @default(false)
+  canceledAt         DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   tenant Tenant @relation("SubscriptionTenant", fields: [tenantId], references: [id], onDelete: Cascade)
-  plan Plan @relation("SubscriptionPlan", fields: [planId], references: [id], onDelete: SetNull)
+  // RESTRICT, deliberately: a plan that subscriptions still reference cannot be
+  // deleted from the catalogue (the pre-reform `onDelete: SetNull` collided with
+  // the NOT NULL column — a delete would have failed as a constraint violation).
+  plan   Plan   @relation("SubscriptionPlan", fields: [planId], references: [id], onDelete: Restrict)
   statusHistory SubscriptionStatusHistory[] @relation("SubscriptionStatusHistory")
 
   @@unique([tenantId])
@@ -240,15 +256,17 @@ model Subscription {
  * platform administrator who triggered the change.
  */
 model SubscriptionStatusHistory {
-  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  subscriptionId String     @db.Uuid
-  from_status  String?       // Previous status before the change
-  to_status    String       // New status after the change
-  changed_by   String?       // Platform administrator UUID
-  reason       String?       // Business justification — optional but recommended
-  createdAt  DateTime      @default(now())
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subscriptionId String             @db.Uuid
+  fromStatus     SubscriptionStatus? // Previous status before the change
+  toStatus       SubscriptionStatus // New status after the change
+  changedBy      String?            @db.Uuid // Platform administrator who triggered the change
+  reason         String?            // Business justification — optional but recommended
+  createdAt      DateTime           @default(now())
 
   subscription Subscription @relation("SubscriptionStatusHistory", fields: [subscriptionId], references: [id], onDelete: Cascade)
+  // SET NULL: history must survive the administrator's account being removed.
+  changedByUser User?       @relation("SubscriptionStatusChangedBy", fields: [changedBy], references: [id], onDelete: SetNull)
 
   @@index([subscriptionId])
   @@index([createdAt])
@@ -959,6 +977,7 @@ model User {
   tenantsActivated      Tenant[]              @relation("TenantActivatedBy")
   tenantsSuspended      Tenant[]              @relation("TenantSuspendedBy")
   tenantStatusChanges   TenantStatusHistory[] @relation("TenantStatusChangedBy")
+  subscriptionStatusChanges SubscriptionStatusHistory[] @relation("SubscriptionStatusChangedBy")
   supportGrantsReceived SupportAccessGrant[]  @relation("SupportGrantsReceived")
   supportGrantsIssued   SupportAccessGrant[]  @relation("SupportGrantsIssued")
   documentsIssued       Document[]            @relation("DocumentIssuedBy")
