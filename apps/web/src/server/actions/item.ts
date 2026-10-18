@@ -19,6 +19,35 @@ import {
   itemLocatorSchema,
   itemQuerySchema,
 } from "@/lib/validations/item";
+import {
+  createCategorySchema,
+  updateCategorySchema,
+  categoryLocatorSchema,
+  categoryQuerySchema,
+  createVariantSchema,
+  updateVariantSchema,
+  variantLocatorSchema,
+  variantQuerySchema,
+  archiveItemSchema,
+  restoreItemSchema,
+  uploadItemImageSchema,
+  imageLocatorSchema,
+} from "@/lib/validations/catalogue";
+import {
+  archiveItem,
+  createCategory,
+  createVariant,
+  deleteCategory,
+  deleteVariant,
+  listCategories,
+  listVariants,
+  renameCategory,
+  restoreItem,
+  updateVariant,
+  type CatalogueResult,
+} from "@/server/services/catalogue/service";
+import { deleteImageRow, uploadItemImage } from "@/server/services/item-images";
+import { appendActivity } from "@/server/services/activities/service";
 
 const itemInclude = {
   taxRate: { include: { category: true } },
@@ -35,6 +64,17 @@ const itemInclude = {
       },
     },
     orderBy: { createdAt: "desc" as const },
+  },
+  // AGENT 02 module C: the product detail page reads the whole catalogue
+  // surface of one item — its category, its images in position order, and
+  // its variants (with the tax rate each variant carries).
+  category: { select: { id: true, name: true, parentId: true } },
+  images: {
+    orderBy: { position: "asc" as const },
+  },
+  variants: {
+    include: { taxRate: { include: { category: true } } },
+    orderBy: [{ position: "asc" as const }, { name: "asc" as const }],
   },
 } satisfies Prisma.ItemInclude;
 
@@ -642,8 +682,18 @@ export async function getItemsAction(rawInput: unknown): Promise<
     return invalidInput(parsed.error, "Invalid query parameters.");
   }
 
-  const { tenantId, search, type, status, page, pageSize, sortBy, sortOrder } =
-    parsed.data;
+  const {
+    tenantId,
+    search,
+    type,
+    status,
+    categoryId,
+    includeArchived,
+    page,
+    pageSize,
+    sortBy,
+    sortOrder,
+  } = parsed.data;
 
   let context;
   try {
@@ -660,6 +710,11 @@ export async function getItemsAction(rawInput: unknown): Promise<
     tenantId: context.tenantId,
     ...(type ? { type } : {}),
     ...(status ? { status } : {}),
+    ...(categoryId ? { categoryId } : {}),
+    // ARCHIVED rows hide themselves unless the caller asks. An explicit
+    // `status` filter is already exact, so the default exclusion only applies
+    // when no status was selected.
+    ...(!status && !includeArchived ? { status: { not: "ARCHIVED" } } : {}),
     ...(search
       ? {
           OR: [
@@ -733,4 +788,502 @@ export async function getItemAction(
     console.error("[getItemAction]", err);
     return fail("Failed to load item.", { code: "INTERNAL" });
   }
+}
+
+// ─── AGENT 02 module C: catalogue categories, variants, archive, images ──────
+//
+// Permission wiring: catalogue children (categories, variants, images) act
+// under the SAME `ITEMS_*` verbs as items themselves — they are parts of the
+// item surface, not separate grants (design spec §1.9 added no catalogue
+// keys). Reads are `ITEMS_READ`, creates `ITEMS_CREATE`, mutations
+// `ITEMS_UPDATE`, deletes `ITEMS_DELETE`. Archive/restore are mutations of the
+// item row, so `ITEMS_UPDATE`. Tenant always comes from the authorized
+// context; every service call below receives that context and re-anchors its
+// `where` clauses on it.
+
+function catalogueAction<T>(result: CatalogueResult<T>): ActionResult<T> {
+  if (result.ok) return { success: true, data: result.data };
+  return {
+    success: false,
+    error: result.message,
+    code: result.code,
+    ...(result.fieldErrors ? { fieldErrors: result.fieldErrors } : {}),
+  };
+}
+
+export async function getCategoriesAction(rawInput: unknown) {
+  const session = await requireAuth();
+
+  const parsed = categoryQuerySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid query parameters.");
+  }
+
+  const { tenantId, ...query } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_READ,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "getCategoriesAction");
+  }
+
+  return catalogueAction(await listCategories(context, query));
+}
+
+export async function createCategoryAction(
+  rawInput: unknown,
+): Promise<
+  ActionResult<{ categoryId: string; name: string; created: boolean }>
+> {
+  const session = await requireAuth();
+
+  const parsed = createCategorySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, ...data } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_CREATE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "createCategoryAction");
+  }
+
+  const result = await createCategory(context, data);
+  if (!result.ok) return catalogueAction(result);
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_CREATED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "CatalogueCategory",
+    resourceId: result.data.categoryId,
+    metadata: { name: result.data.name, created: result.data.created },
+  });
+
+  return { success: true, data: result.data };
+}
+
+export async function updateCategoryAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const parsed = updateCategorySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, categoryId, ...data } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_UPDATE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "updateCategoryAction");
+  }
+
+  const result = await renameCategory(context, { categoryId, ...data });
+  if (!result.ok) return catalogueAction(result);
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_UPDATED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "CatalogueCategory",
+    resourceId: categoryId,
+    metadata: { fields: Object.keys(data) },
+  });
+
+  return { success: true };
+}
+
+export async function deleteCategoryAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const parsed = categoryLocatorSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, categoryId } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_DELETE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "deleteCategoryAction");
+  }
+
+  // Refuses (VALIDATION_ERROR, naming the count) when items are attached —
+  // the FK would otherwise silently unlink them (see the service comment).
+  const result = await deleteCategory(context, categoryId);
+  if (!result.ok) return catalogueAction(result);
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_DELETED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "CatalogueCategory",
+    resourceId: categoryId,
+  });
+
+  return { success: true };
+}
+
+export async function getVariantsAction(rawInput: unknown) {
+  const session = await requireAuth();
+
+  const parsed = variantQuerySchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid query parameters.");
+  }
+
+  const { tenantId, ...query } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_READ,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "getVariantsAction");
+  }
+
+  return catalogueAction(await listVariants(context, query));
+}
+
+export async function createVariantAction(
+  rawInput: unknown,
+): Promise<ActionResult<{ variantId: string }>> {
+  const session = await requireAuth();
+
+  const parsed = createVariantSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, ...data } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_CREATE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "createVariantAction");
+  }
+
+  // The price travels as the validated decimal STRING; the service builds the
+  // Decimal. Nothing here ever does arithmetic on it.
+  const result = await createVariant(context, data);
+  if (!result.ok) return catalogueAction(result);
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_CREATED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "ProductVariant",
+    resourceId: result.data.variantId,
+    metadata: { itemId: data.itemId, sku: data.sku?.trim() || null },
+  });
+
+  return { success: true, data: result.data };
+}
+
+export async function updateVariantAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const parsed = updateVariantSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, variantId, ...data } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_UPDATE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "updateVariantAction");
+  }
+
+  const result = await updateVariant(context, { variantId, ...data });
+  if (!result.ok) return catalogueAction(result);
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_UPDATED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "ProductVariant",
+    resourceId: variantId,
+    metadata: { fields: Object.keys(data) },
+  });
+
+  return { success: true };
+}
+
+export async function deleteVariantAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const parsed = variantLocatorSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, variantId } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_DELETE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "deleteVariantAction");
+  }
+
+  const result = await deleteVariant(context, variantId);
+  if (!result.ok) return catalogueAction(result);
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_DELETED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "ProductVariant",
+    resourceId: variantId,
+  });
+
+  return { success: true };
+}
+
+export async function archiveItemAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const parsed = archiveItemSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, itemId, reason } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_UPDATE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "archiveItemAction");
+  }
+
+  // ARCHIVED only from ACTIVE; INACTIVE is untouched by this verb. Documents
+  // snapshot their lines, so open DRAFT documents do not block the archive.
+  const result = await archiveItem(context, itemId);
+  if (!result.ok) return catalogueAction(result);
+
+  await appendActivity(context, session.user.id, {
+    eventType: "ITEM_ARCHIVED",
+    payload: { itemId, name: result.data.name, reason: reason || null },
+    source: "action:item.archive",
+    sourceKey: `${itemId}:archived`,
+  });
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_UPDATED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "Item",
+    resourceId: itemId,
+    metadata: { transition: "ACTIVE->ARCHIVED" },
+  });
+
+  return { success: true };
+}
+
+export async function restoreItemAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const parsed = restoreItemSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, itemId } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_UPDATE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "restoreItemAction");
+  }
+
+  const result = await restoreItem(context, itemId);
+  if (!result.ok) return catalogueAction(result);
+
+  await appendActivity(context, session.user.id, {
+    eventType: "ITEM_RESTORED",
+    payload: { itemId, name: result.data.name },
+    source: "action:item.restore",
+    sourceKey: `${itemId}:restored`,
+  });
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_UPDATED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "Item",
+    resourceId: itemId,
+    metadata: { transition: "ARCHIVED->ACTIVE" },
+  });
+
+  return { success: true };
+}
+
+/**
+ * Upload one item image. The payload carries the FILE itself (zod
+ * `instanceof(File)`); the blob URL is produced exclusively by the storage
+ * seam inside `services/item-images.ts` and is never accepted from the
+ * client. Without `BLOB_READ_WRITE_TOKEN` the seam's descriptive
+ * configuration error surfaces HERE and no `ItemImage` row is written —
+ * fail-closed, no fake URLs (design spec §7).
+ */
+export async function uploadItemImageAction(rawInput: unknown): Promise<
+  ActionResult<{
+    id: string;
+    itemId: string;
+    position: number;
+    blobUrl: string;
+  }>
+> {
+  const session = await requireAuth();
+
+  const parsed = uploadItemImageSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, itemId, alt, file } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_UPDATE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "uploadItemImageAction");
+  }
+
+  try {
+    const result = await uploadItemImage(context, {
+      itemId,
+      file,
+      alt: alt?.trim() || null,
+    });
+    if (!result.ok) return catalogueAction(result);
+
+    await recordAudit({
+      action: AUDIT_ACTIONS.ITEM_UPDATED,
+      userId: session.user.id,
+      tenantId: context.tenantId,
+      resource: "ItemImage",
+      resourceId: result.image.id,
+      metadata: { itemId, position: result.image.position },
+    });
+
+    return { success: true, data: result.image };
+  } catch (err) {
+    // The blob seam raises its descriptive configuration error (missing
+    // token) and storage failures; the message is configuration truth, not
+    // user data, so it is safe to surface — internals are logged only.
+    console.error("[uploadItemImageAction]", err);
+    const message =
+      err instanceof Error && err.message.includes("BLOB_READ_WRITE_TOKEN")
+        ? err.message
+        : "Failed to upload item image.";
+    return fail(message, { code: "INTERNAL" });
+  }
+}
+
+export async function deleteItemImageAction(
+  rawInput: unknown,
+): Promise<ActionResult> {
+  const session = await requireAuth();
+
+  const parsed = imageLocatorSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error);
+  }
+
+  const { tenantId, imageId } = parsed.data;
+
+  let context;
+  try {
+    context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ITEMS_UPDATE,
+    );
+  } catch (err) {
+    return authorizationFailure(err, "deleteItemImageAction");
+  }
+
+  const result = await deleteImageRow(context, imageId);
+  if (!result.ok) return catalogueAction(result);
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.ITEM_UPDATED,
+    userId: session.user.id,
+    tenantId: context.tenantId,
+    resource: "ItemImage",
+    resourceId: imageId,
+    metadata: { deleted: true },
+  });
+
+  return { success: true };
 }

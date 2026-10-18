@@ -219,9 +219,17 @@ export default async function TenantDetailPage({
           <CardTitle>{t("detail.settingsTitle")}</CardTitle>
         </CardHeader>
         <CardContent>
+          {/* The provider numbering panel edits the three original series; an
+              ORDER series falls back to the documented database default until
+              the console grows the fourth row. */}
           <TenantNumberingPanel
             tenantId={tenant.id}
-            series={tenant.numbering}
+            series={tenant.numbering
+              .filter((row) => row.type !== "ORDER")
+              .map((row) => ({
+                ...row,
+                type: row.type as "QUOTATION" | "INVOICE" | "DELIVERY_NOTE",
+              }))}
           />
         </CardContent>
       </Card>

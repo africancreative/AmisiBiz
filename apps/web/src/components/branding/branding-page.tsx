@@ -58,6 +58,9 @@ export function BrandingForm({ tenantId }: BrandingFormProps) {
   const [logoUrl, setLogoUrl] = React.useState<string | null>(null);
   const [logoLoading, setLogoLoading] = React.useState(false);
   const [serverError, setServerError] = React.useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = React.useState<string | null>(
+    null,
+  );
   const [contrastWarning, setContrastWarning] = React.useState<string | null>(
     null,
   );
@@ -129,11 +132,13 @@ export function BrandingForm({ tenantId }: BrandingFormProps) {
 
     setIsLoading(true);
     setServerError(null);
+    setSuccessMessage(null);
 
     try {
       const result = await updateTenantBrandingAction({ tenantId, ...data });
 
       if (result.success) {
+        setSuccessMessage("Branding settings saved successfully.");
         router.refresh();
         return;
       }
@@ -194,6 +199,7 @@ export function BrandingForm({ tenantId }: BrandingFormProps) {
     <div className="space-y-6">
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
         {serverError && <Alert tone="danger">{serverError}</Alert>}
+        {successMessage && <Alert tone="success">{successMessage}</Alert>}
 
         <div className="grid gap-6 lg:grid-cols-2">
           <section className="space-y-6">

@@ -18,6 +18,11 @@ import {
 } from "@amisibiz/documents";
 import { Plus, X, FileText, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  documentTypeLabel,
+  type DocumentTypeFilter,
+  type DocumentTypeValue,
+} from "@/components/documents/document-labels";
 
 interface ContactOption {
   id: string;
@@ -57,11 +62,13 @@ interface NewDocumentClientProps {
   taxRateOptions: TaxRateOption[];
   /** False when the role may write documents but may not read the catalogue. */
   canReadCatalogue: boolean;
-  initialType: "QUOTATION" | "INVOICE" | "DELIVERY_NOTE" | "";
-  allowedTypes: ("QUOTATION" | "INVOICE" | "DELIVERY_NOTE")[];
+  initialType: DocumentTypeFilter;
+  allowedTypes: DocumentTypeValue[];
   canCreateQuotation: boolean;
   canCreateInvoice: boolean;
   canCreateDeliveryNote: boolean;
+  /** `ORDERS_CREATE`: without it the order choice is never offered. */
+  canCreateOrder: boolean;
   title: string;
   description: string;
 }
@@ -184,18 +191,20 @@ function applyCatalogueFacts(
   };
 }
 
-function typeLabel(type: string): string {
-  switch (type) {
-    case "QUOTATION":
-      return "Quotation";
-    case "INVOICE":
-      return "Invoice";
-    case "DELIVERY_NOTE":
-      return "Delivery Note";
-    default:
-      return type;
-  }
-}
+/**
+ * What each type is for, in one line, so the choice on this form is made with the
+ * document's role in mind. An order is deliberately described as a request, not as
+ * a tax document: the invoice raised from it is the one that requests payment.
+ */
+const TYPE_HINTS: Record<DocumentTypeValue, string> = {
+  QUOTATION:
+    "A priced offer. The customer can accept or reject it, and an accepted quotation can become an order or an invoice.",
+  ORDER: "What the customer has asked for. It is not a tax invoice.",
+  INVOICE:
+    "A tax document that requests payment. Issuing it allocates a number and freezes the totals.",
+  DELIVERY_NOTE:
+    "What was handed over. Acknowledged quantities are recorded on the note, not on the invoice.",
+};
 
 export function NewDocumentClient({
   locale,
@@ -209,17 +218,14 @@ export function NewDocumentClient({
   canCreateQuotation,
   canCreateInvoice,
   canCreateDeliveryNote,
+  canCreateOrder,
   title,
   description,
 }: NewDocumentClientProps) {
   const router = useRouter();
 
-  const [docType, setDocType] = React.useState<
-    "QUOTATION" | "INVOICE" | "DELIVERY_NOTE"
-  >(
-    initialType ||
-      (allowedTypes[0] as "QUOTATION" | "INVOICE" | "DELIVERY_NOTE") ||
-      "QUOTATION",
+  const [docType, setDocType] = React.useState<DocumentTypeValue>(
+    (initialType || allowedTypes[0] || "QUOTATION") as DocumentTypeValue,
   );
   const [contactId, setContactId] = React.useState<string>("");
   const [currency, setCurrency] = React.useState("KES");
@@ -237,6 +243,14 @@ export function NewDocumentClient({
   const [lines, setLines] = React.useState<LineInput[]>([
     { id: crypto.randomUUID(), ...DEFAULT_LINE },
   ]);
+  /**
+   * One key for the whole form, generated at mount.
+   *
+   * The engine treats a repeated key as the same write and returns the document it
+   * already created, so a double submit or a retry after a lost response cannot
+   * produce two drafts. A fresh page visit is a fresh intent and gets a fresh key.
+   */
+  const [idempotencyKey] = React.useState(() => crypto.randomUUID());
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = React.useState<
@@ -501,6 +515,12 @@ export function NewDocumentClient({
     e.preventDefault();
     setServerError(null);
 
+    // Defence in depth: the submit button is already disabled for a role with no
+    // create permission, and the server authorizes again regardless.
+    if (noTypeAllowed) {
+      return;
+    }
+
     if (!validateForm()) {
       return;
     }
@@ -510,6 +530,8 @@ export function NewDocumentClient({
       const payload = {
         tenantId,
         type: docType,
+        // Replays instead of duplicating if this submit is retried.
+        idempotencyKey,
         contactId: contactId || null,
         currency,
         issueDate: toIsoDate(issueDate),
@@ -577,10 +599,12 @@ export function NewDocumentClient({
     return `${contact.firstName ?? ""} ${contact.lastName ?? ""}`.trim() || "—";
   };
 
-  const canCreateType = (type: "QUOTATION" | "INVOICE" | "DELIVERY_NOTE") => {
+  const canCreateType = (type: DocumentTypeValue) => {
     switch (type) {
       case "QUOTATION":
         return canCreateQuotation;
+      case "ORDER":
+        return canCreateOrder;
       case "INVOICE":
         return canCreateInvoice;
       case "DELIVERY_NOTE":
@@ -589,6 +613,7 @@ export function NewDocumentClient({
   };
 
   const filteredAllowedTypes = allowedTypes.filter(canCreateType);
+  const noTypeAllowed = filteredAllowedTypes.length === 0;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -606,24 +631,40 @@ export function NewDocumentClient({
       <div className="grid gap-6 md:grid-cols-2">
         <div className="space-y-4">
           <h2 className="text-lg font-medium">Document Type</h2>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {filteredAllowedTypes.map((type) => (
               <button
                 key={type}
                 type="button"
                 onClick={() => setDocType(type)}
+                aria-pressed={docType === type}
                 className={cn(
-                  "p-4 border rounded-lg text-left transition-colors",
+                  "rounded-lg border p-4 text-left transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                   docType === type
                     ? "border-primary bg-primary/5"
                     : "border-border hover:border-primary/50",
                 )}
               >
-                <FileText className="h-5 w-5 mb-2 text-muted-foreground" />
-                <p className="font-medium">{typeLabel(type)}</p>
+                <FileText className="mb-2 h-5 w-5 text-muted-foreground" />
+                <p className="font-medium">{documentTypeLabel(type)}</p>
+                {docType === type && (
+                  <p className="mt-1 text-xs text-muted-foreground">Selected</p>
+                )}
               </button>
             ))}
           </div>
+          {filteredAllowedTypes.length > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {TYPE_HINTS[docType]}
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground" role="status">
+              This role cannot create any document type, so this form is closed.
+              Ask for a create permission, or open an existing draft from the
+              documents list.
+            </p>
+          )}
         </div>
 
         <div className="space-y-4">
@@ -680,7 +721,9 @@ export function NewDocumentClient({
           )}
         </div>
 
-        {(docType === "INVOICE" || docType === "QUOTATION") && (
+        {(docType === "INVOICE" ||
+          docType === "QUOTATION" ||
+          docType === "ORDER") && (
           <div className="space-y-4">
             <Label htmlFor="dueDate">Due Date</Label>
             <Input
@@ -689,6 +732,13 @@ export function NewDocumentClient({
               value={dueDate}
               onChange={(e) => setDueDate(e.target.value)}
             />
+            {docType === "ORDER" && (
+              <p className="text-xs text-muted-foreground">
+                Optional. For an order it is the day delivery or fulfilment is
+                expected, not a payment deadline — payment is requested by the
+                invoice raised from this order.
+              </p>
+            )}
           </div>
         )}
 
@@ -1036,14 +1086,14 @@ export function NewDocumentClient({
         >
           Cancel
         </Button>
-        <Button type="submit" disabled={isSubmitting}>
+        <Button type="submit" disabled={isSubmitting || noTypeAllowed}>
           {isSubmitting ? (
             <>
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               Creating...
             </>
           ) : (
-            "Create Draft"
+            `Create ${documentTypeLabel(docType).toLowerCase()} draft`
           )}
         </Button>
       </div>

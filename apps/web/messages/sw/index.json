@@ -195,10 +195,12 @@
     "nav": {
       "overview": "Muhtasari",
       "contacts": "Watu",
+      "leads": "Wateja wenye hamu",
       "items": "Bidhaa",
       "documents": "Nyaraka",
       "portalAccess": "Ufikiaji wa Portal ya Mteja",
       "branding": "Chapa",
+      "pipelines": "Mipangilio ya mchakato",
       "audit": "Rekodi ya ukaguzi",
       "team": "Timu",
       "dashboard": "Dashibodi"
@@ -208,6 +210,16 @@
     "noAccessTitle": "Ufikiaji haupatikani",
     "noAccessDescription": "Huna ufikiaji wa nafasi hii ya kazi tena, au imefungwa kwako. Ikiwa hii si tarajiwa, wasiliana na msimamizi wa biashara yako au muhudumu.",
     "readonlyBanner": "Shirika hili limesimamishwa. Unaweza kusoma, kuchapisha na kupakua vilivyopo; maandishi mapya na usawazishaji vinakataliwa muhudumu anaposondoa kusimamishwa."
+  },
+  "crm": {
+    "leads": {
+      "title": "Wateja wenye hamu",
+      "description": "Ombi zote ambazo nafasi hii ya kazi imenasa — zinazoshughulikiwa kwenye ubao wa mchakato au kwa kutumia vichujio kwenye orodha."
+    },
+    "pipelines": {
+      "title": "Mipangilio ya mchakato",
+      "description": "Hatua zinazounda safu wima za ubao wa wateja wenye hamu. Hatua za ushindi na porozi zinahakikishwa na seva."
+    }
   },
   "audit": {
     "title": "Rekodi ya ukaguzi",

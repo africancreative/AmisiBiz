@@ -95,11 +95,12 @@ describe("@amisibiz/documents", () => {
   });
 
   it("exposes the default document series", () => {
-    expect(documents.DEFAULT_DOCUMENT_SERIES).toHaveLength(3);
+    expect(documents.DEFAULT_DOCUMENT_SERIES).toHaveLength(4);
     expect(documents.DEFAULT_DOCUMENT_SERIES.map((s) => s.type)).toEqual([
       "QUOTATION",
       "INVOICE",
       "DELIVERY_NOTE",
+      "ORDER",
     ]);
   });
 });

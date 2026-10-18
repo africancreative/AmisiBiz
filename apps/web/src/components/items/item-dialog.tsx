@@ -118,7 +118,10 @@ export function ItemDialog({ tenantId, itemId, onSuccess }: ItemDialogProps) {
 
       const item = result.data.item;
       setValue("type", item.type);
-      setValue("status", item.status);
+      // The dialog only edits the ACTIVE/INACTIVE switch; an ARCHIVED item is
+      // shown with the form default and restored through the archive surface
+      // (AGENT 02 Phase 3), never silently flipped by this dialog.
+      if (item.status !== "ARCHIVED") setValue("status", item.status);
       setValue("name", item.name);
       setValue("sku", item.sku ?? "");
       setValue("description", item.description ?? "");

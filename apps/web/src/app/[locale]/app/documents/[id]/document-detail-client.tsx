@@ -30,8 +30,11 @@ import {
   type TaxBreakdownEntry,
 } from "@amisibiz/documents";
 import {
+  cancelOrderAction,
   convertQuotationAction,
+  convertQuotationToOrderAction,
   createDeliveryNoteAction,
+  createInvoiceFromOrderAction,
   createReplacementAction,
   getDocumentDetailAction,
   issueDocumentAction,
@@ -42,7 +45,19 @@ import {
   voidInvoiceAction,
   type DocumentDetail,
 } from "@/server/actions/document";
-import { ArrowLeft, Download, Loader2, Printer, Truck } from "lucide-react";
+import {
+  documentTypeLabel,
+  type DocumentTypeValue,
+} from "@/components/documents/document-labels";
+import { DerivativeDocumentDialog } from "@/components/documents/derivative-document-dialog";
+import {
+  ArrowLeft,
+  Download,
+  FileText,
+  Loader2,
+  Printer,
+  Truck,
+} from "lucide-react";
 
 /**
  * Document detail.
@@ -67,12 +82,19 @@ import { ArrowLeft, Download, Loader2, Printer, Truck } from "lucide-react";
  * frozen snapshot note and is immutable apart from the lifecycle verbs the
  * lifecycle allows (payments, deliveries, decisions, voiding, replacement).
  *
- * Every type, status and payment-method label comes from the `documentEnums`
- * message namespace, which is the same vocabulary the database enums use — so a
- * new locale translates one block rather than hunting through components.
+ * Every status and payment-method label comes from the `documentEnums` message
+ * namespace, which is the same vocabulary the database enums use — so a new
+ * locale translates one block rather than hunting through components. Type labels
+ * come from it too, with one documented exception: the bundle has no `ORDER` key
+ * yet, so an order is labelled from the shared English helper.
+ *
+ * ORDER is the same screen on purpose. An order is a `Document` of type `ORDER`,
+ * so it gets the same lines, totals, snapshot note and status trail; what differs
+ * is which verbs are offered (the `ORDERS_*` keys the server page resolved), the
+ * words used for it — an order is never called a tax invoice here — and the two
+ * derivative actions an order can start: an invoice and a delivery note.
  */
 
-type DocumentTypeValue = "QUOTATION" | "INVOICE" | "DELIVERY_NOTE";
 type QuotationDecision = "ACCEPTED" | "REJECTED" | "EXPIRED" | "CANCELLED";
 type PaymentMethodValue =
   "CASH" | "BANK_TRANSFER" | "MOBILE_MONEY" | "CARD" | "CHEQUE" | "OTHER";
@@ -93,6 +115,21 @@ interface DocumentDetailClientProps {
   canRecordPayment: boolean;
   canReversePayment: boolean;
   canCreateReplacement: boolean;
+  /**
+   * The ORDER-scoped keys. An order is a `Document` of type `ORDER` and the
+   * document actions pick the permission from the STORED type, so an order's
+   * issue/void/payment buttons are only offered when `ORDERS_ISSUE` /
+   * `ORDERS_VOID` are held — never on the invoice flags, which would show
+   * controls the server is obliged to refuse.
+   */
+  canIssueOrder: boolean;
+  canVoidOrder: boolean;
+  canRecordOrderPayment: boolean;
+  canReverseOrderPayment: boolean;
+  /** `ORDERS_CREATE`: turns an accepted quotation into an order draft. */
+  canCreateOrder: boolean;
+  /** `INVOICES_CREATE`: raises the invoice an order is billed by. */
+  canCreateInvoice: boolean;
   canDownload: boolean;
   title: string;
 }
@@ -208,6 +245,12 @@ export function DocumentDetailClient({
   canRecordPayment,
   canReversePayment,
   canCreateReplacement,
+  canIssueOrder,
+  canVoidOrder,
+  canRecordOrderPayment,
+  canReverseOrderPayment,
+  canCreateOrder,
+  canCreateInvoice,
   canDownload,
   title,
 }: DocumentDetailClientProps) {
@@ -216,7 +259,14 @@ export function DocumentDetailClient({
   // branding preview and the platform console, so a status reads the same in
   // every screen and in every locale.
   const tEnums = useTranslations("documentEnums");
-  const typeLabel = (value: string): string => tEnums(`type.${value}`);
+  /**
+   * `documentEnums.type` carries no `ORDER` key yet — `messages/**` belongs to the
+   * consolidated i18n pass, and next-intl throws on a missing key instead of
+   * rendering it — so an order takes its label from the shared English vocabulary
+   * while the three types the bundle does hold keep translating.
+   */
+  const typeLabel = (value: string): string =>
+    value === "ORDER" ? documentTypeLabel(value) : tEnums(`type.${value}`);
   const statusLabel = (value: string): string => tEnums(`status.${value}`);
   const paymentMethodLabel = (value: string): string =>
     tEnums(`paymentMethod.${value}`);
@@ -226,6 +276,24 @@ export function DocumentDetailClient({
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [isBusy, setIsBusy] = React.useState(false);
   const [actionError, setActionError] = React.useState<string | null>(null);
+
+  /**
+   * One create-from-source dialog open at a time.
+   *
+   * The dialog is mounted only while it is open, which is what gives each opening
+   * its own idempotency key: confirming twice replays the same write instead of
+   * allocating a second document, while deciding to do the same thing again later
+   * is treated as the new intent it is.
+   */
+  const [derivativeDialog, setDerivativeDialog] = React.useState<
+    "invoice-from-order" | "delivery-note" | "order-from-quotation" | null
+  >(null);
+
+  /**
+   * The status the server derived from the payment it just wrote, shown exactly as
+   * it came back. Recording a payment never sets a status here; the engine does.
+   */
+  const [derivedStatus, setDerivedStatus] = React.useState<string | null>(null);
 
   // Payment form
   const [paymentAmount, setPaymentAmount] = React.useState("");
@@ -239,6 +307,8 @@ export function DocumentDetailClient({
   // reason cannot be applied to the wrong row after a click elsewhere.
   const [voidReason, setVoidReason] = React.useState("");
   const [voidOpen, setVoidOpen] = React.useState(false);
+  const [cancelReason, setCancelReason] = React.useState("");
+  const [cancelOpen, setCancelOpen] = React.useState(false);
   const [reversalTarget, setReversalTarget] = React.useState<string | null>(
     null,
   );
@@ -293,6 +363,8 @@ export function DocumentDetailClient({
     async (
       action: () => Promise<ActionResult<ActionData | void>>,
       redirectTo?: (id: string) => string,
+      /** Lets a caller surface what the server returned (e.g. a derived status). */
+      onResult?: (data: ActionData | undefined) => void,
     ): Promise<boolean> => {
       setIsBusy(true);
       setActionError(null);
@@ -302,6 +374,7 @@ export function DocumentDetailClient({
           setActionError(result.error);
           return false;
         }
+        onResult?.(result.data as ActionData | undefined);
         if (redirectTo) {
           const id = (result.data as ActionData | undefined)?.id;
           if (typeof id === "string") {
@@ -383,8 +456,11 @@ export function DocumentDetailClient({
 
   // Which verbs this screen offers is the state machine's answer AND the
   // server page's permission flags. Neither alone is enough, and neither is a
-  // check: every action is authorized again where it is executed.
-  const showIssue = canIssue && isDraft && canMoveTo("ISSUED");
+  // check: every action is authorized again where it is executed. The flag is
+  // picked per stored type, because that is what the actions do server-side.
+  const isOrder = type === "ORDER";
+  const showIssue =
+    isDraft && canMoveTo("ISSUED") && (isOrder ? canIssueOrder : canIssue);
   const decisions: QuotationDecision[] =
     type === "QUOTATION" && canRecordQuotationDecision
       ? (["ACCEPTED", "REJECTED", "EXPIRED", "CANCELLED"] as const).filter(
@@ -393,25 +469,58 @@ export function DocumentDetailClient({
       : [];
   const showConvert =
     type === "QUOTATION" && canConvert && status === "ACCEPTED";
+  /** An accepted quotation can also become an ORDER instead of an invoice. */
+  const showConvertToOrder =
+    type === "QUOTATION" && canCreateOrder && status === "ACCEPTED";
   const showVoid =
-    type === "INVOICE" && canVoid && status !== "VOID" && canMoveTo("VOID");
+    (isOrder ? canVoidOrder : canVoid) &&
+    (isOrder || type === "INVOICE") &&
+    status !== "VOID" &&
+    canMoveTo("VOID");
+  /**
+   * The unfulfilled order's exit. A DRAFT order has no number and was never
+   * issued, so closing it is a cancellation rather than a void — which is exactly
+   * what `cancelOrder` accepts — and an issued one only offers it when the state
+   * machine allows the move.
+   */
+  const showCancelOrder =
+    isOrder &&
+    canVoidOrder &&
+    status !== "CANCELLED" &&
+    status !== "VOID" &&
+    (isDraft || canMoveTo("CANCELLED"));
   const showDeliveryForm =
     type === "DELIVERY_NOTE" &&
     canRecordDelivery &&
     (status === "ISSUED" || status === "PARTIALLY_DELIVERED");
+  /** Only invoices and orders carry a money lifecycle. */
+  const isMonetary = type === "INVOICE" || isOrder;
+  const showPaymentsPanel = isMonetary && document.payments.length > 0;
+  const canReverseThisPayment = isOrder
+    ? canReverseOrderPayment
+    : canReversePayment;
   const showPaymentForm =
-    type === "INVOICE" &&
-    canRecordPayment &&
+    isMonetary &&
+    (isOrder ? canRecordOrderPayment : canRecordPayment) &&
     !isDraft &&
     status !== "VOID" &&
+    status !== "CANCELLED" &&
     status !== "PAID";
   const showDeliveryNoteCreate =
-    type === "INVOICE" &&
+    isMonetary &&
     canCreateDeliveryNote &&
     !isDraft &&
-    status !== "VOID";
+    status !== "VOID" &&
+    status !== "CANCELLED";
+  /** The invoice that bills an order. The engine returns the existing one if this order is already invoiced. */
+  const showInvoiceFromOrder =
+    isOrder &&
+    canCreateInvoice &&
+    !isDraft &&
+    status !== "VOID" &&
+    status !== "CANCELLED";
   const showReplacement =
-    type === "INVOICE" && canCreateReplacement && status === "VOID";
+    isMonetary && canCreateReplacement && status === "VOID";
 
   return (
     <div className="space-y-6">
@@ -628,7 +737,7 @@ export function DocumentDetailClient({
                   strong
                 />
               </div>
-              {type === "INVOICE" && !isDraft && (
+              {isMonetary && !isDraft && (
                 <>
                   <div className="border-t border-border pt-2 space-y-2">
                     <TotalRow
@@ -645,10 +754,17 @@ export function DocumentDetailClient({
                     Outstanding is the stored total minus the {paidRows.length}{" "}
                     recorded payment
                     {paidRows.length === 1 ? "" : "s"}. Payments are
-                    transactions; the status above is derived from them by the
-                    server.
+                    transactions; the {isOrder ? "order" : "invoice"} status
+                    above is derived from them by the server.
                   </p>
                 </>
+              )}
+              {isOrder && !isDraft && (
+                <p className="text-xs text-muted-foreground">
+                  This is an order, not a tax invoice. Money noted here is
+                  received against the order; the invoice raised from it is the
+                  document that requests payment.
+                </p>
               )}
             </div>
           </div>
@@ -710,7 +826,7 @@ export function DocumentDetailClient({
       {(document.customerNote ||
         document.terms ||
         document.deliveryNote ||
-        (type === "INVOICE" && document.voidReason)) && (
+        (isMonetary && document.voidReason)) && (
         <div className="card">
           <div className="p-4 space-y-4 text-sm">
             {document.customerNote && (
@@ -751,7 +867,7 @@ export function DocumentDetailClient({
         </div>
       )}
 
-      {type === "INVOICE" && document.payments.length > 0 && (
+      {showPaymentsPanel && (
         <div className="card">
           <div className="p-4 border-b border-border">
             <h2 className="text-lg font-medium">Payments</h2>
@@ -788,7 +904,7 @@ export function DocumentDetailClient({
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      {canReversePayment && !payment.reversedAt ? (
+                      {canReverseThisPayment && !payment.reversedAt ? (
                         reversalTarget === payment.id ? (
                           <div className="flex items-center justify-end gap-2">
                             <Input
@@ -857,7 +973,8 @@ export function DocumentDetailClient({
           </TableContainer>
           <p className="p-4 border-t border-border text-xs text-muted-foreground">
             Reversing a payment keeps the row and marks it reversed, then the
-            server re-derives the invoice status. A status is never set by hand.
+            server re-derives the {isOrder ? "order" : "invoice"} status. A
+            status is never set by hand.
           </p>
         </div>
       )}
@@ -1068,28 +1185,132 @@ export function DocumentDetailClient({
             </section>
           )}
 
-          {showDeliveryNoteCreate && (
+          {showConvertToOrder && (
             <section className="space-y-3">
-              <h3 className="font-medium">Raise a delivery note</h3>
+              <h3 className="font-medium">Convert to order</h3>
               <p className="text-sm text-muted-foreground">
-                Drafts a delivery note against this invoice&apos;s lines. What
-                the customer later acknowledges is recorded here, separate from
-                what was invoiced and paid.
+                Creates a NEW draft order carrying this quotation&apos;s
+                customer, currency and lines; the quotation itself stays as
+                issued. An order records what the customer asked for — it is not
+                a tax invoice, and the invoice that requests payment is raised
+                from the order after it is issued.
               </p>
               <Button
                 variant="outline"
                 size="sm"
-                loading={isBusy}
-                onClick={() =>
-                  void runAction(
-                    () =>
-                      createDeliveryNoteAction({
-                        tenantId,
-                        sourceDocumentId: document.id,
-                      }),
-                    (id) => `/${locale}/app/documents/${id}`,
-                  )
-                }
+                onClick={() => setDerivativeDialog("order-from-quotation")}
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Create order draft
+              </Button>
+            </section>
+          )}
+
+          {showInvoiceFromOrder && (
+            <section className="space-y-3">
+              <h3 className="font-medium">Create invoice from order</h3>
+              <p className="text-sm text-muted-foreground">
+                Raises a draft invoice for exactly the figures this order
+                agreed. Issuing that invoice is what requests payment and
+                creates the tax document; this step alone does neither.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDerivativeDialog("invoice-from-order")}
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Create invoice draft
+              </Button>
+            </section>
+          )}
+
+          {showCancelOrder && (
+            <section className="space-y-3">
+              <h3 className="font-medium">Cancel this order</h3>
+              <p className="text-sm text-muted-foreground">
+                Closing an order that was never fulfilled. The row and its
+                number are kept and the reason is written to the status trail —
+                a cancelled order is not deleted. An order with goods already
+                acknowledged on a delivery note is refused until that delivery
+                is corrected.
+              </p>
+              {cancelOpen ? (
+                <div className="space-y-3">
+                  <Label htmlFor="cancel-reason">Reason</Label>
+                  <Textarea
+                    id="cancel-reason"
+                    rows={2}
+                    value={cancelReason}
+                    onChange={(e) => setCancelReason(e.target.value)}
+                    placeholder="Why this order is being cancelled"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      loading={isBusy}
+                      disabled={cancelReason.trim().length < 3}
+                      onClick={() =>
+                        void runAction(() =>
+                          cancelOrderAction({
+                            tenantId,
+                            documentId: document.id,
+                            reason: cancelReason.trim(),
+                          }),
+                        ).then((ok) => {
+                          if (ok) {
+                            setCancelOpen(false);
+                            setCancelReason("");
+                          }
+                        })
+                      }
+                    >
+                      Confirm cancellation
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setCancelOpen(false);
+                        setCancelReason("");
+                      }}
+                    >
+                      Keep the order open
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    A reason of at least three characters is required.
+                  </p>
+                </div>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setCancelOpen(true);
+                    setVoidOpen(false);
+                    setReversalTarget(null);
+                  }}
+                >
+                  Cancel order
+                </Button>
+              )}
+            </section>
+          )}
+          {showDeliveryNoteCreate && (
+            <section className="space-y-3">
+              <h3 className="font-medium">Raise a delivery note</h3>
+              <p className="text-sm text-muted-foreground">
+                Drafts a delivery note against this{" "}
+                {isOrder ? "order" : "invoice"}&apos;s lines, each defaulting to
+                the quantity still outstanding. What the customer acknowledges
+                is recorded on the note, separate from what was billed and paid.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDerivativeDialog("delivery-note")}
               >
                 <Truck className="h-4 w-4 mr-2" />
                 Create delivery note draft
@@ -1102,8 +1323,9 @@ export function DocumentDetailClient({
               <h3 className="font-medium">Record a payment</h3>
               <p className="text-sm text-muted-foreground">
                 Records money the business says it received. Nothing here is a
-                confirmation from a bank or a payment provider, and the invoice
-                status is derived by the server from the payments it holds.
+                confirmation from a bank or a payment provider, and the{" "}
+                {isOrder ? "order" : "invoice"} status is derived by the server
+                from the payments it holds.
               </p>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="space-y-1">
@@ -1165,16 +1387,24 @@ export function DocumentDetailClient({
                 loading={isBusy}
                 disabled={!/^\d+(\.\d{1,4})?$/.test(paymentAmount.trim())}
                 onClick={() =>
-                  void runAction(() =>
-                    recordPaymentAction({
-                      tenantId,
-                      documentId: document.id,
-                      amount: paymentAmount.trim(),
-                      occurredOn: toIsoDate(paymentDate),
-                      method: paymentMethod,
-                      reference: paymentReference.trim() || null,
-                      note: paymentNote.trim() || null,
-                    }),
+                  void runAction(
+                    () =>
+                      recordPaymentAction({
+                        tenantId,
+                        documentId: document.id,
+                        amount: paymentAmount.trim(),
+                        occurredOn: toIsoDate(paymentDate),
+                        method: paymentMethod,
+                        reference: paymentReference.trim() || null,
+                        note: paymentNote.trim() || null,
+                      }),
+                    undefined,
+                    // The status the server derived from the payment it wrote.
+                    (data) => {
+                      if (typeof data?.status === "string") {
+                        setDerivedStatus(data.status);
+                      }
+                    },
                   ).then((ok) => {
                     if (ok) {
                       setPaymentAmount("");
@@ -1186,16 +1416,40 @@ export function DocumentDetailClient({
               >
                 Record payment
               </Button>
+              {derivedStatus && (
+                <div
+                  className="rounded-lg border border-success/30 bg-success/5 p-3 text-sm"
+                  role="status"
+                >
+                  <p>
+                    Payment recorded. The server set the{" "}
+                    {isOrder ? "order" : "invoice"} status to{" "}
+                    <strong>{statusLabel(derivedStatus)}</strong> from the
+                    payments it holds.
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-1"
+                    onClick={() => setDerivedStatus(null)}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              )}
             </section>
           )}
 
           {showVoid && (
             <section className="space-y-3">
-              <h3 className="font-medium">Void this invoice</h3>
+              <h3 className="font-medium">
+                Void this {isOrder ? "order" : "invoice"}
+              </h3>
               <p className="text-sm text-muted-foreground">
-                Keeps the row, its number and its history: a voided invoice is
-                cancelled against the customer, never deleted. A reason is
-                required and is written to the audit trail.
+                Keeps the row, its number and its history: a voided{" "}
+                {isOrder ? "order" : "invoice"} is cancelled against the
+                customer, never deleted. A reason is required and is written to
+                the audit trail.
               </p>
               {voidOpen ? (
                 <div className="space-y-3">
@@ -1205,7 +1459,11 @@ export function DocumentDetailClient({
                     rows={2}
                     value={voidReason}
                     onChange={(e) => setVoidReason(e.target.value)}
-                    placeholder="Why this invoice is being cancelled"
+                    placeholder={
+                      isOrder
+                        ? "Why this order is being voided"
+                        : "Why this invoice is being cancelled"
+                    }
                   />
                   <div className="flex gap-2">
                     <Button
@@ -1241,6 +1499,9 @@ export function DocumentDetailClient({
                       Cancel
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    A reason of at least three characters is required.
+                  </p>
                 </div>
               ) : (
                 <Button
@@ -1249,9 +1510,10 @@ export function DocumentDetailClient({
                   onClick={() => {
                     setVoidOpen(true);
                     setReversalTarget(null);
+                    setCancelOpen(false);
                   }}
                 >
-                  Void invoice
+                  Void {isOrder ? "order" : "invoice"}
                 </Button>
               )}
             </section>
@@ -1264,6 +1526,8 @@ export function DocumentDetailClient({
                 The controlled correction: a new draft linked to this voided
                 document, which keeps its own number and its own place in the
                 trail. Nothing on the voided document changes.
+                {isOrder &&
+                  " This action is gated on the invoice-create permission the server requires for it, and the replacement is a new order draft."}
               </p>
               <Button
                 variant="outline"
@@ -1288,6 +1552,9 @@ export function DocumentDetailClient({
           {!showIssue &&
             decisions.length === 0 &&
             !showConvert &&
+            !showConvertToOrder &&
+            !showInvoiceFromOrder &&
+            !showCancelOrder &&
             !showPaymentForm &&
             !showVoid &&
             !showDeliveryForm &&
@@ -1296,11 +1563,90 @@ export function DocumentDetailClient({
               <p className="text-sm text-muted-foreground">
                 No further action is available for this document.{" "}
                 {!isDraft &&
-                  "Issued documents are immutable; corrections go through voiding and a replacement."}
+                  "Issued documents are immutable; corrections go through voiding and a replacement."}{" "}
+                {!canIssue &&
+                  !canIssueOrder &&
+                  !canVoid &&
+                  !canVoidOrder &&
+                  "Actions a role cannot perform are not offered here; the server checks the same permissions again on submission."}
               </p>
             )}
         </div>
       </div>
+
+      {derivativeDialog === "order-from-quotation" && (
+        <DerivativeDocumentDialog
+          title="Create an order draft from this quotation"
+          description="The order carries this quotation's customer, currency and lines. The server re-reads its own catalogue for the figures; nothing here re-prices them."
+          confirmLabel="Create order draft"
+          fields={["issueDate"]}
+          notice="An order is a commercial request, not a tax invoice. If an order has already been raised from this quotation, the server returns that one instead of creating a second."
+          run={(input) =>
+            convertQuotationToOrderAction({
+              tenantId,
+              quotationId: document.id,
+              issueDate: input.issueDate,
+              idempotencyKey: input.idempotencyKey,
+            })
+          }
+          onCreated={(id) => {
+            setDerivativeDialog(null);
+            router.push(`/${locale}/app/documents/${id}`);
+            router.refresh();
+          }}
+          onClose={() => setDerivativeDialog(null)}
+        />
+      )}
+
+      {derivativeDialog === "invoice-from-order" && (
+        <DerivativeDocumentDialog
+          title="Create an invoice draft from this order"
+          description="A draft invoice for exactly the figures this order agreed, dated from the day chosen below. Issuing that invoice is the step that requests payment."
+          confirmLabel="Create invoice draft"
+          fields={["issueDate", "dueDate"]}
+          notice="Only one invoice is raised per order: if this order is already invoiced, the server returns the existing invoice instead of creating a second."
+          run={(input) =>
+            createInvoiceFromOrderAction({
+              tenantId,
+              orderId: document.id,
+              issueDate: input.issueDate,
+              dueDate: input.dueDate,
+              idempotencyKey: input.idempotencyKey,
+            })
+          }
+          onCreated={(id) => {
+            setDerivativeDialog(null);
+            router.push(`/${locale}/app/documents/${id}`);
+            router.refresh();
+          }}
+          onClose={() => setDerivativeDialog(null)}
+        />
+      )}
+
+      {derivativeDialog === "delivery-note" && (
+        <DerivativeDocumentDialog
+          title="Create a delivery note draft"
+          description={`A delivery note for this ${
+            isOrder ? "order" : "invoice"
+          }'s lines, each defaulting to the quantity still outstanding. Several notes may reference the same document.`}
+          confirmLabel="Create delivery note draft"
+          fields={["deliveryDate"]}
+          run={(input) =>
+            createDeliveryNoteAction({
+              tenantId,
+              sourceDocumentId: document.id,
+              deliveryDate: input.deliveryDate,
+              idempotencyKey: input.idempotencyKey,
+            })
+          }
+          onCreated={(id) => {
+            setDerivativeDialog(null);
+            router.push(`/${locale}/app/documents/${id}`);
+            router.refresh();
+          }}
+          onClose={() => setDerivativeDialog(null)}
+        />
+      )}
 
       {isBusy && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">

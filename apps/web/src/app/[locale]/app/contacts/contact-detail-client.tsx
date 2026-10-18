@@ -19,6 +19,7 @@ import { Pagination } from "@amisibiz/ui/pagination";
 import { EmptyState } from "@amisibiz/ui/state";
 import { ContactDialog } from "@/components/contacts/contact-dialog";
 import { ContactItemsClient } from "@/components/contacts/contact-items-client";
+import { TimelinePanel } from "@/components/activities/timeline-client";
 import {
   getContactAction,
   getContactBalanceAction,
@@ -46,6 +47,7 @@ interface ContactDetailClientProps {
   canUpdate: boolean;
   canDelete: boolean;
   canManageItems: boolean;
+  canViewTimeline: boolean;
   title: string;
 }
 
@@ -65,6 +67,7 @@ export function ContactDetailClient({
   canUpdate,
   canDelete,
   canManageItems,
+  canViewTimeline,
   title,
 }: ContactDetailClientProps) {
   const router = useRouter();
@@ -380,10 +383,11 @@ export function ContactDetailClient({
 
       {/* Tabs */}
       <Tabs defaultValue="details" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="details">Details</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="catalogue">Customer Catalogue</TabsTrigger>
+          <TabsTrigger value="activity">Activity</TabsTrigger>
         </TabsList>
 
         {/* Details Tab */}
@@ -609,6 +613,29 @@ export function ContactDetailClient({
             canUpdate={canManageItems}
             canDelete={canManageItems}
           />
+        </TabsContent>
+
+        {/* Activity Tab (customer 360) */}
+        <TabsContent value="activity">
+          <Card>
+            <CardHeader>
+              <CardTitle>Activity timeline</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {canViewTimeline ? (
+                <TimelinePanel
+                  tenantId={tenantId}
+                  contactId={contact.id}
+                  locale={locale}
+                />
+              ) : (
+                <EmptyState
+                  title="Timeline hidden"
+                  description="This account cannot read activity events."
+                />
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

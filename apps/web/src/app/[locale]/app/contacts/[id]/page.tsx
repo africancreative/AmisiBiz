@@ -31,6 +31,10 @@ export default async function ContactDetailPage({
       canUpdate={tenantRoleHasPermission(role, PERMISSIONS.CONTACTS_UPDATE)}
       canDelete={tenantRoleHasPermission(role, PERMISSIONS.CONTACTS_DELETE)}
       canManageItems={tenantRoleHasPermission(role, PERMISSIONS.ITEMS_CREATE)}
+      canViewTimeline={tenantRoleHasPermission(
+        role,
+        PERMISSIONS.ACTIVITIES_READ,
+      )}
       title={t("title")}
     />
   );

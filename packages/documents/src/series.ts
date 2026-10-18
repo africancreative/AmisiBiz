@@ -1,5 +1,5 @@
 /**
- * Document series — the three document types every tenant starts with.
+ * Document series — the four document types every tenant starts with.
  *
  * Mirrors the `DocumentType` Prisma enum. The numbering rows themselves live
  * in the database (`DocumentNumbering`, one row per tenant per type);
@@ -12,6 +12,7 @@ export const DOCUMENT_TYPES = [
   "QUOTATION",
   "INVOICE",
   "DELIVERY_NOTE",
+  "ORDER",
 ] as const;
 
 export type DocumentType = (typeof DOCUMENT_TYPES)[number];
@@ -20,4 +21,5 @@ export const DEFAULT_DOCUMENT_SERIES = [
   { type: "QUOTATION", prefix: "QUO" },
   { type: "INVOICE", prefix: "INV" },
   { type: "DELIVERY_NOTE", prefix: "DN" },
+  { type: "ORDER", prefix: "ORD" },
 ] as const satisfies readonly { type: DocumentType; prefix: string }[];

@@ -96,6 +96,15 @@ export default async function WorkspaceLayout({
           },
         ]
       : []),
+    ...(can(PERMISSIONS.LEADS_READ)
+      ? [
+          {
+            href: `/${locale}/app/leads`,
+            label: t("nav.leads"),
+            icon: <UsersIcon />,
+          },
+        ]
+      : []),
     ...(can(PERMISSIONS.ITEMS_READ)
       ? [
           {
@@ -143,6 +152,15 @@ export default async function WorkspaceLayout({
           {
             href: `/${locale}/app/settings/branding`,
             label: t("nav.branding"),
+            icon: <SettingsIcon />,
+          },
+        ]
+      : []),
+    ...(can(PERMISSIONS.PIPELINES_READ)
+      ? [
+          {
+            href: `/${locale}/app/settings/pipelines`,
+            label: t("nav.pipelines"),
             icon: <SettingsIcon />,
           },
         ]

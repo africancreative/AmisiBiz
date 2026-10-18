@@ -63,6 +63,7 @@ export default async function DocumentsPage({
         role,
         PERMISSIONS.DELIVERY_NOTES_CREATE,
       )}
+      canCreateOrder={tenantRoleHasPermission(role, PERMISSIONS.ORDERS_CREATE)}
       canDownload={tenantRoleHasPermission(
         role,
         PERMISSIONS.DOCUMENTS_DOWNLOAD,

@@ -1,8 +1,10 @@
 import { prisma, type ScopedTx } from "@amisibiz/database";
 import { recordAudit, AUDIT_ACTIONS } from "@/lib/audit";
 import type { TenantAuthzContext } from "@/server/auth/authorization";
+import { appendActivity } from "@/server/services/activities/service";
 import {
   addDecimalStrings,
+  compareDecimalStrings,
   outstandingBalance,
   sumDecimalStrings,
 } from "@amisibiz/documents";
@@ -12,6 +14,7 @@ import {
   assertDocumentTransition,
   deriveDeliveryStatus,
   deriveInvoiceStatus,
+  isConvertibleQuotation,
 } from "./lifecycle";
 import { allocateDocumentNumber } from "./numbering";
 import {
@@ -683,8 +686,10 @@ export async function issueDocument(
     });
 
     // A zero-total invoice is paid the moment it is issued: nothing is owed.
+    // An ORDER derives its payment status exactly like an invoice (same
+    // function, same rule), so the shortcut covers both money documents.
     if (
-      document.type === "INVOICE" &&
+      (document.type === "INVOICE" || document.type === "ORDER") &&
       Number(resolved.calculation.total) <= 0
     ) {
       await tx.document.update({
@@ -696,7 +701,10 @@ export async function issueDocument(
         documentId: document.id,
         fromStatus: "ISSUED",
         toStatus: "PAID",
-        reason: "Zero-total invoice",
+        reason:
+          document.type === "INVOICE"
+            ? "Zero-total invoice"
+            : "Zero-total order",
         actorId,
       });
     }
@@ -716,7 +724,12 @@ export async function issueDocument(
   return result;
 }
 
-/** Voids an issued invoice, keeping the row and its number for the trail. */
+/**
+ * Voids an issued invoice (or order), keeping the row and its number for the
+ * trail. VOID is the correction path of the money documents only — the same
+ * mechanics serve both types; the permission that opened this call is chosen
+ * per stored type by the action (`INVOICES_VOID` / `ORDERS_VOID`).
+ */
 export async function voidInvoice(
   context: TenantAuthzContext,
   actorId: string,
@@ -726,10 +739,10 @@ export async function voidInvoice(
 
   await prisma.$transaction(async (tx) => {
     const document = await loadDocumentOrThrow(tx, tenantId, input.documentId);
-    if (document.type !== "INVOICE") {
+    if (document.type !== "INVOICE" && document.type !== "ORDER") {
       throw new DocumentServiceError(
         "VALIDATION",
-        "Only invoices can be voided.",
+        "Only invoices and orders can be voided.",
       );
     }
     assertDocumentTransition(document.type, document.status, "VOID");
@@ -839,7 +852,14 @@ async function invoiceBalance(
   };
 }
 
-/** Records a payment against an invoice; the invoice status is then derived. */
+/**
+ * Records a payment against an invoice or an order; the status is then derived.
+ *
+ * An ORDER walks the same money path as an INVOICE (design spec §0: "Paid is
+ * derived, never clicked"), so both types run through the exact same guards and
+ * the exact same `deriveInvoiceStatus` here — there is no order-specific
+ * payment rule that could drift.
+ */
 export async function recordPayment(
   context: TenantAuthzContext,
   actorId: string,
@@ -849,10 +869,10 @@ export async function recordPayment(
 
   const outcome = await prisma.$transaction(async (tx) => {
     const document = await loadDocumentOrThrow(tx, tenantId, input.documentId);
-    if (document.type !== "INVOICE") {
+    if (document.type !== "INVOICE" && document.type !== "ORDER") {
       throw new DocumentServiceError(
         "VALIDATION",
-        "Payments can only be recorded against an invoice.",
+        "Payments can only be recorded against an invoice or an order.",
       );
     }
     if (document.status === "DRAFT") {
@@ -867,10 +887,35 @@ export async function recordPayment(
         "A void invoice cannot receive payments.",
       );
     }
+    // Only an ORDER can reach CANCELLED (the status CHECK confines every other
+    // type), so this guard is order-only in effect while staying one shared
+    // path: a cancelled order owes nothing and must not be re-opened by money.
+    if (document.status === "CANCELLED") {
+      throw new DocumentServiceError(
+        "CONFLICT",
+        "A cancelled document cannot receive payments.",
+      );
+    }
     if (Number(input.amount) <= 0) {
       throw new DocumentServiceError(
         "VALIDATION",
         "A payment must be greater than zero.",
+        "amount",
+      );
+    }
+
+    // Overpayment guard, on the decimal strings — the same comparison the
+    // derived status uses, so the balance the guard sees and the status it
+    // produces cannot disagree. Floats are not trusted with money here either.
+    const before = await invoiceBalance(tx, tenantId, document.id);
+    const projected = addDecimalStrings(before.paid, input.amount);
+    if (
+      projected === null ||
+      compareDecimalStrings(projected, before.total) === 1
+    ) {
+      throw new DocumentServiceError(
+        "VALIDATION",
+        "This payment exceeds the outstanding balance.",
         "amount",
       );
     }
@@ -1133,6 +1178,364 @@ export async function convertQuotationToInvoice(
 }
 
 /**
+ * Converts an ACCEPTED quotation into a draft ORDER, mirroring
+ * `convertQuotationToInvoice` exactly (design spec §0: orders are `Document`
+ * rows of type ORDER; the conversion reuses `sourceDocumentId` derivation).
+ *
+ * Same rules, same reasons:
+ *  - only an ACCEPTED quotation converts (`isConvertibleQuotation`) — an order
+ *    records what the customer agreed to, so a merely-issued quote is refused;
+ *  - the lines are copied with `source: "stored"` — the server NEVER re-trusts
+ *    a price and never re-prices a conversion; what the customer accepted is
+ *    what the order carries, whatever the catalogue says today;
+ *  - the new order is a DRAFT with no number; issuance is the separate,
+ *    permission-gated `issueDocument` step;
+ *  - duplicate protection is `(tenantId, idempotencyKey)` for a genuinely
+ *    concurrent retry, and one ORDER per `sourceDocumentId` for a retried
+ *    conversion (the database pairs ORDER→QUOTATION in
+ *    `document_source_type_is_compatible`).
+ */
+export async function convertQuotationToOrder(
+  context: TenantAuthzContext,
+  actorId: string,
+  input: {
+    quotationId: string;
+    idempotencyKey?: string | null;
+    issueDate?: Date | null;
+  },
+): Promise<{ id: string }> {
+  const tenantId = context.tenantId;
+
+  const created = await prisma.$transaction(async (tx) => {
+    const quotation = await loadDocumentOrThrow(
+      tx,
+      tenantId,
+      input.quotationId,
+    );
+    if (quotation.type !== "QUOTATION") {
+      throw new DocumentServiceError(
+        "VALIDATION",
+        "Only a quotation can be converted to an order.",
+      );
+    }
+    if (!isConvertibleQuotation(quotation.status)) {
+      throw new DocumentServiceError(
+        "CONFLICT",
+        "Only an accepted quotation can be converted to an order.",
+      );
+    }
+
+    if (input.idempotencyKey) {
+      const byKey = await tx.document.findFirst({
+        where: { tenantId, idempotencyKey: input.idempotencyKey },
+        select: { id: true },
+      });
+      if (byKey) return byKey;
+    }
+
+    const existing = await tx.document.findFirst({
+      where: { tenantId, sourceDocumentId: quotation.id, type: "ORDER" },
+      select: { id: true },
+    });
+    if (existing) return existing;
+
+    const resolved = await resolveLines(
+      tx,
+      tenantId,
+      quotation.lines.map((line) => linePayloadFromStoredLine(line)),
+      // The prices the customer ACCEPTED are the ones the order must carry.
+      { source: "stored" },
+    );
+
+    const order = await tx.document.create({
+      data: {
+        tenantId,
+        type: "ORDER",
+        status: "DRAFT",
+        number: null,
+        currency: quotation.currency,
+        contactId: quotation.contactId,
+        sourceDocumentId: quotation.id,
+        idempotencyKey: input.idempotencyKey ?? null,
+        issueDate: input.issueDate ?? new Date(),
+        dueDate: quotation.dueDate,
+        customerNote: quotation.customerNote,
+        terms: quotation.terms,
+        ...totalsData(resolved.calculation),
+      },
+      select: { id: true },
+    });
+
+    await tx.documentLine.createMany({
+      data: lineRows(tenantId, order.id, resolved),
+    });
+    await writeStatusEvent(tx, {
+      tenantId,
+      documentId: order.id,
+      fromStatus: null,
+      toStatus: "DRAFT",
+      reason: "Converted from quotation",
+      actorId,
+    });
+
+    return order;
+  });
+
+  await appendActivity(context, actorId, {
+    eventType: "ORDER_CREATED",
+    documentId: created.id,
+    source: "order:convert",
+    sourceKey: `order:convert:${input.quotationId}`,
+  });
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.DOCUMENT_CONVERTED,
+    userId: actorId,
+    tenantId,
+    resource: "Document",
+    resourceId: created.id,
+    metadata: { from: input.quotationId, to: "ORDER" },
+  });
+
+  return created;
+}
+
+/**
+ * Raises a draft INVOICE from an issued-or-later ORDER, mirroring
+ * `convertQuotationToInvoice` and `createDeliveryNoteFromDocument`.
+ *
+ * The database pairing (`document_source_type_is_compatible`) allows
+ * INVOICE-from-ORDER, and one invoice per source is kept by the extended
+ * `document_one_derived_invoice_per_source` index — a retried call returns the
+ * invoice that already exists rather than creating a second one. Lines are
+ * copied `stored`: the order's agreed figures are what gets invoiced.
+ */
+export async function createInvoiceFromOrder(
+  context: TenantAuthzContext,
+  actorId: string,
+  input: {
+    orderId: string;
+    dueDate?: Date | null;
+    issueDate?: Date | null;
+    idempotencyKey?: string | null;
+  },
+): Promise<{ id: string }> {
+  const tenantId = context.tenantId;
+
+  const created = await prisma.$transaction(async (tx) => {
+    const order = await loadDocumentOrThrow(tx, tenantId, input.orderId);
+    if (order.type !== "ORDER") {
+      throw new DocumentServiceError(
+        "VALIDATION",
+        "An invoice can only be raised from an order.",
+      );
+    }
+    if (order.status === "DRAFT") {
+      throw new DocumentServiceError(
+        "CONFLICT",
+        "Issue the order before invoicing against it.",
+      );
+    }
+    if (order.status === "CANCELLED" || order.status === "VOID") {
+      throw new DocumentServiceError(
+        "CONFLICT",
+        "A cancelled or void order cannot be invoiced.",
+      );
+    }
+
+    if (input.idempotencyKey) {
+      const byKey = await tx.document.findFirst({
+        where: { tenantId, idempotencyKey: input.idempotencyKey },
+        select: { id: true },
+      });
+      if (byKey) return byKey;
+    }
+
+    const existing = await tx.document.findFirst({
+      where: { tenantId, sourceDocumentId: order.id, type: "INVOICE" },
+      select: { id: true },
+    });
+    if (existing) return existing;
+
+    const issueDate = input.issueDate ?? new Date();
+    const dueDate =
+      input.dueDate ?? new Date(issueDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    const resolved = await resolveLines(
+      tx,
+      tenantId,
+      order.lines.map((line) => linePayloadFromStoredLine(line)),
+      // The figures the order agreed are the ones the invoice carries —
+      // never today's catalogue price.
+      { source: "stored" },
+    );
+
+    const invoice = await tx.document.create({
+      data: {
+        tenantId,
+        type: "INVOICE",
+        status: "DRAFT",
+        number: null,
+        currency: order.currency,
+        contactId: order.contactId,
+        sourceDocumentId: order.id,
+        idempotencyKey: input.idempotencyKey ?? null,
+        issueDate,
+        dueDate,
+        customerNote: order.customerNote,
+        terms: order.terms,
+        ...totalsData(resolved.calculation),
+      },
+      select: { id: true },
+    });
+
+    await tx.documentLine.createMany({
+      data: lineRows(tenantId, invoice.id, resolved),
+    });
+    await writeStatusEvent(tx, {
+      tenantId,
+      documentId: invoice.id,
+      fromStatus: null,
+      toStatus: "DRAFT",
+      reason: "Raised from order",
+      actorId,
+    });
+
+    return invoice;
+  });
+
+  await recordAudit({
+    action: AUDIT_ACTIONS.DOCUMENT_CONVERTED,
+    userId: actorId,
+    tenantId,
+    resource: "Document",
+    resourceId: created.id,
+    metadata: { from: input.orderId, to: "INVOICE" },
+  });
+
+  return created;
+}
+
+/**
+ * Audit key for an order cancellation. `AUDIT_ACTIONS` has no seeded
+ * `document.cancelled` entry and the audit vocabulary module is outside this
+ * phase's edit whitelist, so the canonical string is declared beside its only
+ * writer — same camelCase-in-second-segment convention as its neighbours.
+ */
+const AUDIT_DOCUMENT_CANCELLED = "document.orderCancelled";
+
+/**
+ * Cancels an unfulfilled order with a mandatory reason (design spec §0:
+ * "Cancellation of an unfulfilled order = CANCELLED transition with reason;
+ * VOID reserved for issued-order correction path").
+ *
+ * Rules:
+ *  - ISSUED and PARTIALLY_PAID orders move to CANCELLED through the state
+ *    machine, so a PAID or already-CANCELLED order is refused as an illegal
+ *    transition / conflict rather than silently rewritten.
+ *  - a DRAFT order is simply editable: cancelling one is a draft edit the
+ *    lifecycle table never had to enumerate (noted as a deviation in the
+ *    implementation report — `packages/documents` seeds DRAFT→[ISSUED] only,
+ *    and the schema CHECK permits ORDER ∈ CANCELLED).
+ *  - an order with delivered goods cannot be cancelled: a delivery note that
+ *    was issued against it (or its invoice) with a recorded delivery is a fact
+ *    the correction path handles — void the delivery/correct it first. The
+ *    refusal is an honest VALIDATION error, never a silent reversal of the
+ *    delivery record.
+ */
+export async function cancelOrder(
+  context: TenantAuthzContext,
+  actorId: string,
+  input: { documentId: string; reason: string },
+): Promise<void> {
+  const tenantId = context.tenantId;
+
+  await prisma.$transaction(async (tx) => {
+    const document = await loadDocumentOrThrow(tx, tenantId, input.documentId);
+    if (document.type !== "ORDER") {
+      throw new DocumentServiceError(
+        "VALIDATION",
+        "Only orders can be cancelled from this path.",
+      );
+    }
+    if (document.status === "CANCELLED") {
+      throw new DocumentServiceError(
+        "CONFLICT",
+        "This order is already cancelled.",
+      );
+    }
+    if (document.status === "VOID") {
+      throw new DocumentServiceError(
+        "CONFLICT",
+        "A void order is closed; use a replacement draft to correct it.",
+      );
+    }
+    // DRAFT is the un-numbered, editable state: nothing was promised on it, so
+    // closing it is a draft edit. Anything that has been issued goes through
+    // the state machine like every other lifecycle move.
+    if (document.status !== "DRAFT") {
+      assertDocumentTransition(document.type, document.status, "CANCELLED");
+    }
+
+    // Open delivery notes with recorded deliveries block the cancellation.
+    const notes = await tx.document.findMany({
+      where: {
+        tenantId,
+        sourceDocumentId: document.id,
+        type: "DELIVERY_NOTE",
+      },
+      select: { id: true, status: true },
+    });
+    for (const note of notes) {
+      if (note.status === "DRAFT" || note.status === "CANCELLED") continue;
+      const deliveredLines = await tx.documentLine.count({
+        where: {
+          tenantId,
+          documentId: note.id,
+          deliveredQuantity: { gt: 0 },
+        },
+      });
+      if (deliveredLines > 0) {
+        throw new DocumentServiceError(
+          "VALIDATION",
+          "This order already has delivered goods on a delivery note. Void or correct the delivery first.",
+        );
+      }
+    }
+
+    await tx.document.update({
+      where: { id: document.id },
+      data: { status: "CANCELLED" },
+    });
+    await writeStatusEvent(tx, {
+      tenantId,
+      documentId: document.id,
+      fromStatus: document.status,
+      toStatus: "CANCELLED",
+      reason: input.reason,
+      actorId,
+    });
+  });
+
+  await appendActivity(context, actorId, {
+    eventType: "ORDER_CANCELLED",
+    documentId: input.documentId,
+    source: "order:cancel",
+    sourceKey: `order:cancel:${input.documentId}`,
+    payload: { reason: input.reason },
+  });
+
+  await recordAudit({
+    action: AUDIT_DOCUMENT_CANCELLED,
+    userId: actorId,
+    tenantId,
+    resource: "Document",
+    resourceId: input.documentId,
+    metadata: { reason: input.reason },
+  });
+}
+
+/**
  * Creates a draft delivery note from an issued invoice, defaulting each line to
  * the quantity still outstanding. Partial deliveries are the norm, so several
  * notes may reference one source; uniqueness there comes from `idempotencyKey`,
@@ -1155,10 +1558,14 @@ export async function createDeliveryNoteFromDocument(
       tenantId,
       input.sourceDocumentId,
     );
-    if (source.type !== "INVOICE" && source.type !== "DELIVERY_NOTE") {
+    if (
+      source.type !== "INVOICE" &&
+      source.type !== "ORDER" &&
+      source.type !== "DELIVERY_NOTE"
+    ) {
       throw new DocumentServiceError(
         "VALIDATION",
-        "A delivery note can only be raised against an invoice.",
+        "A delivery note can only be raised against an invoice or an order.",
       );
     }
     if (source.status === "DRAFT") {

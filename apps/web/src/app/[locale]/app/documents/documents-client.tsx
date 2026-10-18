@@ -23,6 +23,18 @@ import {
   type DocumentListItem,
 } from "@/server/actions/document";
 import {
+  DOCUMENT_STATUS_FILTER_VALUES,
+  DOCUMENT_TYPE_VALUES,
+  documentStatusTone,
+  documentStatusLabel,
+  documentTypeChipClass,
+  documentTypeLabel,
+  isDocumentStatusValue,
+  isDocumentTypeValue,
+  type DocumentTypeFilter,
+  type DocumentTypeValue,
+} from "@/components/documents/document-labels";
+import {
   Loader2,
   Search,
   ChevronUp,
@@ -56,6 +68,8 @@ interface DocumentsClientProps {
   canCreateQuotation: boolean;
   canCreateInvoice: boolean;
   canCreateDeliveryNote: boolean;
+  /** `ORDERS_CREATE` — the only role-gate that makes an order draft legal. */
+  canCreateOrder: boolean;
   canDownload: boolean;
   title: string;
   description: string;
@@ -82,32 +96,17 @@ function toSortOrder(value: string): SortOrder {
   return value === "asc" ? "asc" : "desc";
 }
 
-function toDocumentType(
-  value: string,
-): "QUOTATION" | "INVOICE" | "DELIVERY_NOTE" | "" {
-  return value === "QUOTATION" ||
-    value === "INVOICE" ||
-    value === "DELIVERY_NOTE"
-    ? value
-    : "";
+/**
+ * A URL filter value is only honoured when it is one the server's query schema
+ * accepts; anything else means "all", because a rejected enum would replace a
+ * readable list with an error message.
+ */
+function toDocumentType(value: string): DocumentTypeFilter {
+  return isDocumentTypeValue(value) ? value : "";
 }
 
 function toDocumentStatus(value: string): string | "" {
-  const statuses = [
-    "DRAFT",
-    "ISSUED",
-    "ACCEPTED",
-    "REJECTED",
-    "EXPIRED",
-    "CANCELLED",
-    "PARTIALLY_PAID",
-    "PAID",
-    "OVERDUE",
-    "VOID",
-    "PARTIALLY_DELIVERED",
-    "DELIVERED",
-  ];
-  return statuses.includes(value) ? value : "";
+  return isDocumentStatusValue(value) ? value : "";
 }
 
 /**
@@ -146,42 +145,6 @@ function SortableHeader({
   );
 }
 
-function statusTone(
-  status: string,
-): "success" | "danger" | "warning" | "info" | "neutral" {
-  switch (status) {
-    case "PAID":
-    case "ACCEPTED":
-    case "DELIVERED":
-      return "success";
-    case "OVERDUE":
-    case "VOID":
-    case "REJECTED":
-    case "CANCELLED":
-      return "danger";
-    case "ISSUED":
-      return "info";
-    case "PARTIALLY_PAID":
-    case "PARTIALLY_DELIVERED":
-      return "warning";
-    default:
-      return "neutral";
-  }
-}
-
-function typeLabel(type: string): string {
-  switch (type) {
-    case "QUOTATION":
-      return "Quotation";
-    case "INVOICE":
-      return "Invoice";
-    case "DELIVERY_NOTE":
-      return "Delivery note";
-    default:
-      return type;
-  }
-}
-
 export function DocumentsClient({
   locale,
   tenantId,
@@ -194,6 +157,7 @@ export function DocumentsClient({
   canCreateQuotation,
   canCreateInvoice,
   canCreateDeliveryNote,
+  canCreateOrder,
   canDownload,
   title,
   description,
@@ -209,9 +173,9 @@ export function DocumentsClient({
 
   const [page, setPage] = React.useState(initialPage);
   const [search, setSearch] = React.useState(initialSearch);
-  const [type, setType] = React.useState<
-    "QUOTATION" | "INVOICE" | "DELIVERY_NOTE" | ""
-  >(toDocumentType(initialType));
+  const [type, setType] = React.useState<DocumentTypeFilter>(
+    toDocumentType(initialType),
+  );
   const [status, setStatus] = React.useState<string | "">(
     toDocumentStatus(initialStatus),
   );
@@ -308,7 +272,7 @@ export function DocumentsClient({
     router.push(`?${params.toString()}`);
   };
 
-  const handleCreate = (docType: "QUOTATION" | "INVOICE" | "DELIVERY_NOTE") => {
+  const handleCreate = (docType: DocumentTypeValue) => {
     router.push(`/${locale}/app/documents/new?type=${docType}`);
   };
 
@@ -328,8 +292,11 @@ export function DocumentsClient({
           <h1 className="text-2xl font-semibold">{title}</h1>
           <p className="text-muted-foreground">{description}</p>
         </div>
-        {(canCreateQuotation || canCreateInvoice || canCreateDeliveryNote) && (
-          <div className="flex items-center gap-2">
+        {(canCreateQuotation ||
+          canCreateOrder ||
+          canCreateInvoice ||
+          canCreateDeliveryNote) && (
+          <div className="flex flex-wrap items-center gap-2">
             {canCreateQuotation && (
               <Button
                 variant="outline"
@@ -338,6 +305,16 @@ export function DocumentsClient({
               >
                 <FileText className="h-4 w-4 mr-2" />
                 New Quotation
+              </Button>
+            )}
+            {canCreateOrder && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleCreate("ORDER")}
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                New Order
               </Button>
             )}
             {canCreateInvoice && (
@@ -380,6 +357,7 @@ export function DocumentsClient({
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 type="search"
+                aria-label="Search documents"
                 placeholder="Search by number, contact, email, company..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -390,30 +368,27 @@ export function DocumentsClient({
               value={type}
               onChange={(e) => handleFilterChange("type", e.target.value)}
               className="w-full sm:w-48"
+              aria-label="Filter by document type"
             >
               <option value="">All Types</option>
-              <option value="QUOTATION">Quotation</option>
-              <option value="INVOICE">Invoice</option>
-              <option value="DELIVERY_NOTE">Delivery Note</option>
+              {DOCUMENT_TYPE_VALUES.map((value) => (
+                <option key={value} value={value}>
+                  {documentTypeLabel(value)}
+                </option>
+              ))}
             </Select>
             <Select
               value={status}
               onChange={(e) => handleFilterChange("status", e.target.value)}
               className="w-full sm:w-48"
+              aria-label="Filter by document status"
             >
               <option value="">All Statuses</option>
-              <option value="DRAFT">Draft</option>
-              <option value="ISSUED">Issued</option>
-              <option value="ACCEPTED">Accepted</option>
-              <option value="REJECTED">Rejected</option>
-              <option value="EXPIRED">Expired</option>
-              <option value="CANCELLED">Cancelled</option>
-              <option value="PARTIALLY_PAID">Partially Paid</option>
-              <option value="PAID">Paid</option>
-              <option value="OVERDUE">Overdue</option>
-              <option value="VOID">Voided</option>
-              <option value="PARTIALLY_DELIVERED">Partially Delivered</option>
-              <option value="DELIVERED">Delivered</option>
+              {DOCUMENT_STATUS_FILTER_VALUES.map((value) => (
+                <option key={value} value={value}>
+                  {documentStatusLabel(value)}
+                </option>
+              ))}
             </Select>
           </form>
         </div>
@@ -471,7 +446,7 @@ export function DocumentsClient({
                       description={
                         search || type || status
                           ? "Try adjusting your search or filters."
-                          : "Create your first quotation, invoice or delivery note."
+                          : "Create a quotation, an order, an invoice or a delivery note."
                       }
                     />
                   </TableCell>
@@ -486,14 +461,10 @@ export function DocumentsClient({
                       <span
                         className={cn(
                           "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
-                          doc.type === "QUOTATION"
-                            ? "bg-blue-100 text-blue-800"
-                            : doc.type === "INVOICE"
-                              ? "bg-green-100 text-green-800"
-                              : "bg-purple-100 text-purple-800",
+                          documentTypeChipClass(doc.type),
                         )}
                       >
-                        {typeLabel(doc.type)}
+                        {documentTypeLabel(doc.type)}
                       </span>
                     </TableCell>
                     <TableCell>{getContactLabel(doc)}</TableCell>
@@ -503,8 +474,8 @@ export function DocumentsClient({
                         : "—"}
                     </TableCell>
                     <TableCell>
-                      <Badge tone={statusTone(doc.status)}>
-                        {doc.status.replace(/_/g, " ")}
+                      <Badge tone={documentStatusTone(doc.status)}>
+                        {documentStatusLabel(doc.status)}
                       </Badge>
                     </TableCell>
                     <TableCell className="font-mono text-sm">

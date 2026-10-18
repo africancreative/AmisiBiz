@@ -27,10 +27,52 @@ const addressSchema = z.object({
 });
 
 /**
+ * AGENT 02 capture-channel vocabulary — mirrors the `LeadSource` Prisma enum
+ * (`Contact.source` deliberately reuses the lead capture vocabulary, design
+ * spec §1.1). Kept as a string enum here so this module does not import the
+ * generated client; the action assigns the value straight onto the Prisma
+ * field, which is the same union.
+ */
+export const contactSourceSchema = z.enum([
+  "WEB_FORM",
+  "REFERRAL",
+  "SOCIAL",
+  "CAMPAIGN",
+  "WALK_IN",
+  "PHONE",
+  "EMAIL",
+  "IMPORT",
+  "OTHER",
+]);
+export type ContactSourceValue = z.infer<typeof contactSourceSchema>;
+
+/** Mirrors the `ContactChannel` Prisma enum. */
+export const contactChannelSchema = z.enum([
+  "PHONE",
+  "WHATSAPP",
+  "SMS",
+  "EMAIL",
+  "PORTAL",
+  "OTHER",
+]);
+export type ContactChannelValue = z.infer<typeof contactChannelSchema>;
+
+/**
+ * Tags: at most 20, each trimmed and at most 64 chars. Case-insensitive
+ * dedupe is the SERVICE's job (`services/contacts/tags.ts`) — the schema only
+ * bounds what a form may send.
+ */
+export const contactTagsSchema = z
+  .array(z.string().trim().min(1, "A tag cannot be empty").max(64))
+  .max(20, "At most 20 tags");
+
+/**
  * The writable contact fields, declared once and reused by the create and the
  * update schema. `tenantId`, `contactId` and `status` are intentionally absent
  * here: the tenant comes from the authorized context, the id is a separate
  * locator, and status changes only through the archive/restore actions.
+ * `marketingConsentAt` is absent too: the timestamp is set SERVER-side when
+ * the consent flag flips true — a client never supplies a consent date.
  */
 const contactFields = {
   type: contactTypeSchema.default("INDIVIDUAL"),
@@ -48,6 +90,14 @@ const contactFields = {
   taxPin: z.string().max(50).optional().or(z.literal("")),
   notes: z.string().max(2000).optional().or(z.literal("")),
   addresses: z.array(addressSchema).max(2).optional(),
+  // ── AGENT 02 profile extensions ──────────────────────────────────────────
+  source: contactSourceSchema.optional(),
+  sourceDetail: z.string().max(200).optional().or(z.literal("")),
+  // UTM campaign TEXT only — campaign entities are AGENT 04 territory.
+  sourceCampaign: z.string().max(200).optional().or(z.literal("")),
+  preferredChannel: contactChannelSchema.optional(),
+  marketingConsent: z.boolean().optional(),
+  tags: contactTagsSchema.optional(),
 };
 
 /**
@@ -108,6 +158,12 @@ export const updateContactSchema = z
     taxPin: contactFields.taxPin.optional(),
     notes: contactFields.notes.optional(),
     addresses: contactFields.addresses.optional(),
+    source: contactFields.source.optional(),
+    sourceDetail: contactFields.sourceDetail.optional(),
+    sourceCampaign: contactFields.sourceCampaign.optional(),
+    preferredChannel: contactFields.preferredChannel.optional(),
+    marketingConsent: contactFields.marketingConsent.optional(),
+    tags: contactFields.tags.optional(),
   })
   .superRefine((data, ctx) => {
     // Only enforce identity when the caller touches a name-bearing field, so a
@@ -233,3 +289,81 @@ export type ArchiveContactInput = z.infer<typeof archiveContactSchema>;
 export type ContactLocatorInput = z.infer<typeof contactLocatorSchema>;
 export type ContactQueryInput = z.infer<typeof contactQuerySchema>;
 export type AddressInput = z.infer<typeof addressSchema>;
+
+/* ─────────────────── AGENT 02 contact operations ─────────────────────────── */
+
+/**
+ * Merge is EXPLICITLY two-step (design spec §0: "never automatic dedupe"):
+ * `previewContactMerge` returns the full reparent plan, and `applyContactMerge`
+ * refuses to run unless the caller echoes back `confirm: true`. The confirm
+ * flag being part of the schema is what makes the two-step UX enforceable
+ * server-side rather than a UI convention.
+ */
+export const mergePreviewSchema = z.object({
+  tenantId: z.string().uuid("Invalid tenant ID"),
+  survivorId: z.string().uuid("Invalid contact ID"),
+  loserIds: z
+    .array(z.string().uuid("Invalid contact ID"))
+    .min(1, "At least one contact must be merged away")
+    .max(10, "At most ten contacts can be merged at once"),
+});
+
+export const mergeApplySchema = mergePreviewSchema.extend({
+  confirm: z.boolean(),
+});
+
+/** Duplicate CANDIDATES are scored and returned for human review — never merged. */
+export const duplicateCandidateQuerySchema = z.object({
+  tenantId: z.string().uuid("Invalid tenant ID"),
+  email: z.string().trim().max(254).optional(),
+  phone: z.string().trim().max(50).optional(),
+  companyName: z.string().trim().max(200).optional(),
+  firstName: z.string().trim().max(100).optional(),
+  lastName: z.string().trim().max(100).optional(),
+});
+
+/** Export filter mirrors `contactQuerySchema` minus the pagination. */
+export const contactExportSchema = z.object({
+  tenantId: z.string().uuid("Invalid tenant ID"),
+  search: z.string().max(100).optional(),
+  type: contactTypeSchema.optional(),
+  status: contactStatusSchema.optional(),
+});
+
+export const importPreviewSchema = z.object({
+  tenantId: z.string().uuid("Invalid tenant ID"),
+  csvText: z
+    .string()
+    .min(1, "The CSV file is empty")
+    .max(4_000_000, "The CSV file is too large"),
+});
+
+/**
+ * The commit replays the PREVIEWED rows. `data` is only a container here — the
+ * service re-runs the full `createContactSchema` per row at commit time, so
+ * nothing the preview invented can slip through.
+ */
+export const importCommitSchema = z.object({
+  tenantId: z.string().uuid("Invalid tenant ID"),
+  operationId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{8,64}$/, "Invalid operation ID"),
+  rows: z
+    .array(
+      z.object({
+        rowIndex: z.number().int().min(1).max(5000),
+        data: z.record(z.unknown()),
+      }),
+    )
+    .min(1, "There are no rows to import")
+    .max(5000, "At most 5000 rows can be imported per operation"),
+});
+
+export type MergePreviewInput = z.infer<typeof mergePreviewSchema>;
+export type MergeApplyInput = z.infer<typeof mergeApplySchema>;
+export type DuplicateCandidateQueryInput = z.infer<
+  typeof duplicateCandidateQuerySchema
+>;
+export type ContactExportInput = z.infer<typeof contactExportSchema>;
+export type ImportPreviewInput = z.infer<typeof importPreviewSchema>;
+export type ImportCommitInput = z.infer<typeof importCommitSchema>;

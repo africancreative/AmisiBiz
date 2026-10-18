@@ -20,6 +20,9 @@ export const DOCUMENT_TYPES = [
   "QUOTATION",
   "INVOICE",
   "DELIVERY_NOTE",
+  // AGENT 02 §0: orders are `Document` rows of this type, so the query and
+  // draft-write vocabulary includes ORDER.
+  "ORDER",
 ] as const;
 export const DOCUMENT_STATUSES = [
   "DRAFT",

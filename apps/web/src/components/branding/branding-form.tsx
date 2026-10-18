@@ -216,8 +216,11 @@ export function LogoUpload({
 
       setPreview(objectUrl);
       await onUpload(file);
+      URL.revokeObjectURL(objectUrl);
+      setPreview(null);
     } catch (err) {
       URL.revokeObjectURL(objectUrl);
+      setPreview(null);
       setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";

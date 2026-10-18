@@ -205,6 +205,12 @@ export async function storeTenantLogo(
     return { fileName, logoUrl: blob.url };
   }
 
+  if (process.env.VERCEL) {
+    throw new Error(
+      "BLOB_READ_WRITE_TOKEN is not set on Vercel. Link Vercel Blob in your Vercel Project Settings or add BLOB_READ_WRITE_TOKEN to Environment Variables.",
+    );
+  }
+
   // ── Local filesystem (development) ──────────────────────────────────────
   warnIfStorageEnvironmentIsEphemeral();
   const uploadDir = join(process.cwd(), "uploads", "tenants", tenantId, "logo");

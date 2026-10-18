@@ -166,6 +166,7 @@ model Tenant {
   // CRM & commerce (AGENT 02)
   catalogueCategories  CatalogueCategory[]
   tags                 Tag[]
+  contactTags          ContactTag[]
   itemImages           ItemImage[]
   productVariants      ProductVariant[]
   pipelines            Pipeline[]
@@ -174,6 +175,20 @@ model Tenant {
   tasks                Task[]
   activityEvents       ActivityEvent[]
   shareLinks           ShareLink[]
+  // Social commerce & marketing (AGENT 03)
+  integrationConnections   IntegrationConnection[]
+  integrationWebhookEvents IntegrationWebhookEvent[]
+  conversations            Conversation[]
+  conversationMessages     ConversationMessage[]
+  conversationNotes        ConversationNote[]
+  conversationLabels       ConversationLabel[]
+  labels                   Label[]
+  quickReplies             QuickReply[]
+  marketingEvents          MarketingEvent[]
+  marketingCampaigns       MarketingCampaign[]
+  contentPosts             ContentPost[]
+  publishJobs              PublishJob[]
+  mediaAssets              MediaAsset[]
   // Phase 06 server half: idempotency receipts for pushed operations, and the
   // tombstones a hard delete leaves behind so an offline device drops the row
   // instead of keeping a ghost.
@@ -532,6 +547,137 @@ enum VariantStatus {
   INACTIVE
 }
 
+// ─── Social commerce & marketing types (AGENT 03) ─────────────────────────────
+// Provider identity is the Meta channel a connection represents; a single
+// `IntegrationConnection` is one (tenant, provider) pair.
+enum IntegrationProvider {
+  META_WHATSAPP
+  META_FB_PAGE
+  META_INSTAGRAM
+}
+
+// Connection lifecycle. UNVERIFIED is the freshly-created row before the
+// verifyConnection probe; ERROR means the last probe failed (AUTH class) and
+// outbound is refused. DISCONNECTED deletes the credential ciphertext but keeps
+// history.
+enum ConnectionStatus {
+  UNVERIFIED
+  PENDING_VERIFICATION
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+// A raw webhook event's routing state. PARKED means authentic but not yet
+// resolvable to a tenant; APPLIED means it has been fanned out; IGNORED means a
+// forged/duplicate event kept only for the audit trail.
+enum WebhookRoutingStatus {
+  PARKED
+  APPLIED
+  IGNORED
+}
+
+// The messaging surface a conversation lives on. Deliberately separate from
+// IntegrationProvider: a META_FB_PAGE connection can carry both a Page post and
+// a Messenger conversation.
+enum ConversationChannel {
+  WHATSAPP
+  MESSENGER
+  INSTAGRAM
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  CLOSED
+}
+
+// Message direction. INTERNAL notes are NOT a direction — they are their own
+// table (ConversationNote), so this enum never carries an internal member.
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+// Event tracking vocabulary. The emitters are the share-link resolver, the
+// capture API and the AGENT 02 mutation services, all through the single
+// `appendMarketingEvent` writer.
+enum MarketingEventType {
+  CAMPAIGN_LINK_CLICK
+  PRODUCT_PAGE_VIEW
+  ENQUIRY_SUBMITTED
+  LEAD_CREATED
+  QUOTATION_ACCEPTED
+  ORDER_CREATED
+  PAYMENT_VERIFIED
+  ORDER_FULFILLED
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+// Content publishing channel. WhatsApp has no post surface, so this is narrower
+// than the messaging channel enum on purpose.
+enum ContentPostChannel {
+  FACEBOOK_PAGE
+  INSTAGRAM
+}
+
+enum ContentKind {
+  POST
+  STORY
+  REEL
+}
+
+// Drafting and publishing are separate objects: a ContentPost walks
+// DRAFT → IN_REVIEW → APPROVED/REJECTED, then SCHEDULED, and only a `verified`
+// PublishJob outcome flips it to PUBLISHED. A draft is never rendered published.
+enum ContentPostStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  SCHEDULED
+  PUBLISHED
+  PUBLISH_FAILED
+}
+
+enum PublishJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  ABANDONED
+}
+
+// Classified publish failures. AUTH stops the retry ladder immediately (a
+// revoked credential must not be retried into the provider); the rest walk the
+// 1m/5m/25m/2h/6h ladder before ABANDONED.
+enum PublishErrorClass {
+  AUTH
+  RATE_LIMIT
+  PERMISSION
+  CONTENT
+  NETWORK
+  UNKNOWN
+}
+
+enum MediaAssetKind {
+  IMAGE
+  VIDEO
+}
+
 // ─── Tax configuration (explicit, not implicit) ───────────────────────────────
 
 model TaxCategory {
@@ -631,8 +777,11 @@ model Contact {
   convertedLeads Lead[]          @relation("LeadConvertedContact")
   tasks          Task[]
   contactTags    ContactTag[]
-  shareLinks     ShareLink[]
   activityEvents ActivityEvent[]
+  // Social commerce (AGENT 03): a contact is the customer behind a conversation
+  // and the identity a consented marketing event may attach to.
+  conversations    Conversation[]
+  marketingEvents  MarketingEvent[]
 
   @@unique([tenantId, portalUserId])
   @@index([tenantId])
@@ -705,6 +854,7 @@ model Item {
   images        ItemImage[]
   variants      ProductVariant[]
   shareLinks    ShareLink[]
+  marketingEvents MarketingEvent[]
 
   @@unique([tenantId, sku])
   @@index([tenantId])
@@ -894,6 +1044,7 @@ model Document {
   tasks            Task[]
   activityEvents   ActivityEvent[]
   shareLinks       ShareLink[]
+  marketingEvents  MarketingEvent[]
 
   @@unique([tenantId, type, number])
   @@unique([tenantId, idempotencyKey])
@@ -1110,18 +1261,23 @@ model Tag {
   @@index([tenantId])
 }
 
-// Junction table: tenant isolation is enforced through both parents (Cascade),
-// so it carries no tenantId column of its own.
+// Junction table. It carries its own tenantId because the RLS policy template
+// keys on `"tenantId"` directly (same pattern as DocumentLine/DocumentPayment);
+// a migration trigger asserts the tenant matches both parents.
 model ContactTag {
+  tenantId  String   @db.Uuid
   contactId String   @db.Uuid
   tagId     String   @db.Uuid
   createdAt DateTime @default(now())
 
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
   tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([contactId, tagId])
+  @@index([tenantId])
   @@index([tagId])
+  @@index([tenantId, tagId])
 }
 
 // Images are stored through the provider's Vercel Blob seam
@@ -1259,6 +1415,8 @@ model Lead {
   convertedDocument Document?        @relation("LeadConvertedDocument", fields: [convertedDocumentId], references: [id], onDelete: SetNull)
   tasks             Task[]
   activityEvents    ActivityEvent[]
+  conversations     Conversation[]
+  marketingEvents   MarketingEvent[]
 
   // "Prevent duplicate leads from retries": plain uniques — Postgres NULLS
   // DISTINCT gives the partial-index behaviour the spec describes.
@@ -1365,6 +1523,10 @@ model ShareLink {
   utmSource   String?
   utmMedium   String?
   utmCampaign String?
+  // The campaign this link belongs to (AGENT 03). Nullable SetNull: archiving a
+  // campaign never eats an already-distributed link. UTM text stays the
+  // attribution authority; campaignId is the structured grouping.
+  campaignId  String?        @db.Uuid
   // Bumped only by the public resolver function (retry double-count tolerated
   // and documented — no client-supplied attribution).
   viewCount   Int            @default(0)
@@ -1375,11 +1537,14 @@ model ShareLink {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   item   Item?  @relation(fields: [itemId], references: [id], onDelete: SetNull)
   document Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  campaign MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
-  activityEvents ActivityEvent[]
+  activityEvents  ActivityEvent[]
+  marketingEvents MarketingEvent[]
 
   @@index([tenantId])
   @@index([tenantId, kind])
+  @@index([tenantId, campaignId])
 }
 
 // ─── User profile (identity authority: native credentials) ────────────────────────
@@ -1427,6 +1592,16 @@ model User {
   leadsAssigned         Lead[]
   tasksAssigned         Task[]
   activityEvents        ActivityEvent[]
+  // Social commerce & marketing (AGENT 03): staff attribution on the inbox and
+  // content surfaces. Each is its own named relation because User↔ContentPost
+  // carries two distinct links (approver and creator).
+  integrationConnections IntegrationConnection[] @relation("IntegrationConnectedBy")
+  conversationsAssigned  Conversation[]   @relation("ConversationAssignedTo")
+  messagesAuthored       ConversationMessage[] @relation("ConversationMessageAuthor")
+  notesAuthored          ConversationNote[]    @relation("ConversationNoteAuthor")
+  contentPostsApproved   ContentPost[]    @relation("ContentPostApprovedBy")
+  contentPostsCreated    ContentPost[]    @relation("ContentPostCreatedBy")
+  mediaAssetsUploaded    MediaAsset[]     @relation("MediaAssetUploadedBy")
 
   @@index([email])
   @@index([platformRole])
@@ -1559,4 +1734,382 @@ model SyncDeletion {
 
   @@unique([tenantId, entity, entityId])
   @@index([tenantId, deletedAt])
+}
+
+// ─── Social commerce & marketing (AGENT 03 Phase 1) ───────────────────────────
+//
+// Governing rules from docs/implementation/orchestration/agent-03-design.md §2:
+//
+//   - Every table below carries a plain `tenantId` the RLS policy template keys
+//     on directly; the junction (`ConversationLabel`) carries its own too.
+//   - `IntegrationConnection` holds the encrypted credential
+//     (`credentialCiphertext`, AES-256-GCM keyed on the `INTEGRATION_SECRET`
+//     env). The secret itself never enters the database; only the ciphertext
+//     and non-secret `credentialMeta` do. The API surface exposes neither the
+//     ciphertext nor the raw token.
+//   - `IntegrationWebhookEvent` and `MarketingEvent` are append-only (SELECT +
+//     INSERT grants, a refuse-UPDATE/DELETE trigger), mirroring ActivityEvent.
+//     A webhook row is created PARKED (tenantId NULL) and routed later; the
+//     `(provider, eventId)` unique is the dedup spine Meta's retries demand.
+//   - Drafting and publishing are separate objects: `ContentPost` (a draft that
+//     walks DRAFT → APPROVED → SCHEDULED) and `PublishJob` (an attempt against
+//     a provider). Nothing here claims a live publish; "PUBLISHED" is a state
+//     only a verified job outcome sets in Phase 2.
+//   - `MarketingEvent.contactId` is written ONLY when `Contact.marketingConsent`
+//     is true (server-side rule, Phase 2); the `consented` column records which
+//     branch an event took. `sourceMeta` holds de-identified referrer/device
+//     class only — never an IP.
+
+model IntegrationConnection {
+  id                     String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId               String              @db.Uuid
+  provider               IntegrationProvider
+  status                 ConnectionStatus    @default(UNVERIFIED)
+  // SHA-256 of the webhook verify token (never the raw token) — used by the
+  // Meta handshake, mirroring Invitation.tokenHash.
+  webhookVerifyTokenHash String?
+  // AES-256-GCM ciphertext of the access token, keyed on INTEGRATION_SECRET.
+  // bytea; the plaintext secret never touches this column.
+  credentialCiphertext   Bytes?              @db.ByteA
+  // Non-secret facts about the connection: phone_number_id, page_id,
+  // instagram_user_id, token expiry instant, granted scopes.
+  credentialMeta         Json?
+  // The provider-side id a webhook routes on (phoneNumberId/pageId). Unique per
+  // provider via the partial index the migration adds (invisible to Prisma).
+  providerExternalId     String?
+  lastHealthAt           DateTime?
+  lastError              Json?
+  connectedById          String?             @db.Uuid
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connectedBy  User?                 @relation("IntegrationConnectedBy", fields: [connectedById], references: [id], onDelete: SetNull)
+  conversations Conversation[]
+  // Messages denormalise the connection id for the (connectionId,
+  // providerMessageId) dedup unique; this is the back-relation for that FK.
+  conversationMessages ConversationMessage[]
+  publishJobs  PublishJob[]
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+model IntegrationWebhookEvent {
+  id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  // NULL until routed to a tenant; a parked-but-authentic event carries none.
+  tenantId      String?              @db.Uuid
+  provider      IntegrationProvider
+  deliveryId    String?
+  // The dedup spine: Meta retries the same event id for up to 7 days. Required,
+  // so the (provider, eventId) unique always holds.
+  eventId       String
+  payload       Json
+  routingStatus WebhookRoutingStatus @default(PARKED)
+  receivedAt    DateTime             @default(now())
+  appliedAt     DateTime?
+  createdAt     DateTime             @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, eventId])
+  @@index([tenantId])
+  @@index([provider, receivedAt])
+}
+
+model Conversation {
+  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String              @db.Uuid
+  connectionId     String              @db.Uuid
+  channel          ConversationChannel
+  // Provider-side conversation key (a phone number, a PSID, an IG-scoped id).
+  // Unique per connection; the webhook upsert finds the thread by it.
+  externalId       String
+  contactId        String?             @db.Uuid
+  leadId           String?             @db.Uuid
+  status           ConversationStatus  @default(OPEN)
+  assignedToUserId String?             @db.Uuid
+  unreadCount      Int                 @default(0)
+  lastInboundAt    DateTime?
+  lastOutboundAt   DateTime?
+  firstResponseAt  DateTime?
+  closedAt         DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection     IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  contact        Contact?             @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  lead           Lead?                @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  assignedToUser User?                @relation("ConversationAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  messages       ConversationMessage[]
+  notes          ConversationNote[]
+  labels         ConversationLabel[]
+
+  @@unique([connectionId, externalId])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, lastInboundAt])
+  @@index([tenantId, contactId])
+  @@index([tenantId, assignedToUserId])
+}
+
+model ConversationMessage {
+  id                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String           @db.Uuid
+  conversationId    String           @db.Uuid
+  // Denormalised from the conversation so the `(connectionId, providerMessageId)`
+  // dedup unique is expressible in the datamodel; a trigger keeps it consistent.
+  connectionId      String           @db.Uuid
+  direction         MessageDirection
+  // Provider message id for idempotent inbound upsert; NULL for internally-
+  // originated messages not yet acknowledged. NULLs are distinct, so the unique
+  // is effectively partial.
+  providerMessageId String?
+  body              Json
+  textPlain         String
+  mediaRefs         Json?
+  status            MessageStatus    @default(SENT)
+  statusAt          DateTime?
+  // Snapshot of the contact opt-out state at send time (server-side gate).
+  optOutSnapshot    Boolean          @default(false)
+  // Provenance seam only: marks a message that was composed from an AI draft.
+  aiDraft           Boolean          @default(false)
+  authorId          String?          @db.Uuid
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation           @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  connection   IntegrationConnection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  author       User?                  @relation("ConversationMessageAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@unique([connectionId, providerMessageId])
+  @@index([tenantId])
+  @@index([tenantId, conversationId])
+  @@index([conversationId, createdAt])
+}
+
+model ConversationNote {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String   @db.Uuid
+  conversationId String   @db.Uuid
+  body           String
+  authorId       String?  @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?        @relation("ConversationNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([conversationId, createdAt])
+}
+
+model Label {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @db.Uuid
+  name      String
+  color     String?
+  createdAt DateTime @default(now())
+
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversationTags ConversationLabel[]
+
+  // The migration additionally enforces case-insensitive uniqueness via a
+  // functional unique index on lower(name) (same shape as Tag).
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// Junction table carrying its own tenantId for the RLS policy template; a
+// migration trigger asserts the tenant matches both its conversation and its
+// label (ContactTag precedent).
+model ConversationLabel {
+  tenantId       String   @db.Uuid
+  conversationId String   @db.Uuid
+  labelId        String   @db.Uuid
+  createdAt      DateTime @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  label        Label        @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, labelId])
+  @@index([tenantId])
+  @@index([labelId])
+  @@index([tenantId, labelId])
+}
+
+model QuickReply {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String   @db.Uuid
+  shortcut     String
+  body         String
+  position     Int
+  // Provenance seam: true when the canned reply was AI-generated.
+  aiProvenance Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, shortcut])
+  @@index([tenantId])
+  @@index([tenantId, position])
+}
+
+// Append-only marketing event stream (design spec §0: its own table, not
+// ActivityEvent, for a different consent surface, volume and retention). The
+// single `appendMarketingEvent` writer dedups via (tenantId, eventType,
+// uniqueEventId) with P2002-swallow for retry-safety.
+model MarketingEvent {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String             @db.Uuid
+  eventType     MarketingEventType
+  occurredAt    DateTime           @default(now())
+  uniqueEventId String
+  shareLinkId   String?            @db.Uuid
+  campaignId    String?            @db.Uuid
+  // Populated ONLY when Contact.marketingConsent is true; otherwise the event
+  // stays de-identified (no contactId). `consented` records the branch.
+  contactId     String?            @db.Uuid
+  leadId        String?            @db.Uuid
+  documentId    String?            @db.Uuid
+  itemId        String?            @db.Uuid
+  // Server-minted click id so a share-link retry never double-counts.
+  clickId       String?
+  // De-identified referrer/device class only — never an IP address.
+  sourceMeta    Json?
+  consented     Boolean            @default(false)
+  createdAt     DateTime           @default(now())
+
+  tenant     Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shareLink  ShareLink?         @relation(fields: [shareLinkId], references: [id], onDelete: SetNull)
+  campaign   MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  contact    Contact?           @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  lead       Lead?              @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  document   Document?          @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  item       Item?              @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, eventType, uniqueEventId])
+  @@index([tenantId])
+  @@index([tenantId, occurredAt])
+  @@index([tenantId, campaignId])
+  @@index([tenantId, shareLinkId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, eventType])
+}
+
+model MarketingCampaign {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String         @db.Uuid
+  name           String
+  status         CampaignStatus @default(DRAFT)
+  objective      String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  budgetCurrency String         @default("KES")
+  // Informational budget, never an entitlement or a gate — mirrors Plan's
+  // informational posture. Money CHECK floor mirrors Item_unitPrice_check.
+  budgetAmount   Decimal?       @db.Decimal(18, 4)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shareLinks      ShareLink[]
+  contentPosts    ContentPost[]
+  marketingEvents MarketingEvent[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+}
+
+model ContentPost {
+  id            String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String              @db.Uuid
+  campaignId    String?             @db.Uuid
+  channel       ContentPostChannel
+  kind          ContentKind
+  title         String?
+  body          String
+  // Ordered MediaAsset ids this post references (JSON array, kept flexible).
+  mediaAssetIds Json?
+  status        ContentPostStatus   @default(DRAFT)
+  approvedById  String?             @db.Uuid
+  approvedAt    DateTime?
+  // Our own queue is the scheduler (Instagram has no native scheduling).
+  scheduledFor  DateTime?
+  aiDraft       Boolean             @default(false)
+  createdById   String?             @db.Uuid
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  campaign    MarketingCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  approvedBy  User?              @relation("ContentPostApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  createdBy   User?              @relation("ContentPostCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  publishJobs PublishJob[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, scheduledFor])
+  @@index([tenantId, campaignId])
+}
+
+model PublishJob {
+  id            String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String             @db.Uuid
+  contentPostId String             @db.Uuid
+  connectionId  String             @db.Uuid
+  attempt       Int                @default(1)
+  maxAttempts   Int                @default(5)
+  nextRetryAt   DateTime?
+  status        PublishJobStatus   @default(QUEUED)
+  // A provider reference from a VERIFIED outcome; its presence is the only
+  // thing that can mark a post PUBLISHED. Never fabricated.
+  providerRef   String?
+  errorClass    PublishErrorClass?
+  // Sanitised failure detail — never the raw credential or a provider secret.
+  errorDetail   String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contentPost ContentPost           @relation(fields: [contentPostId], references: [id], onDelete: Cascade)
+  connection  IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Restrict)
+
+  @@unique([contentPostId, attempt])
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([contentPostId])
+  @@index([tenantId, connectionId])
+  @@index([status, nextRetryAt])
+}
+
+model MediaAsset {
+  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String         @db.Uuid
+  // Vercel Blob seam read URL (fail-closed without BLOB_READ_WRITE_TOKEN); no
+  // fake local storage — mirrors ItemImage.blobUrl.
+  blobUrl      String
+  alt          String?
+  kind         MediaAssetKind
+  bytes        Int?
+  width        Int?
+  height       Int?
+  uploadedById String?        @db.Uuid
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedBy User?  @relation("MediaAssetUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, kind])
 }

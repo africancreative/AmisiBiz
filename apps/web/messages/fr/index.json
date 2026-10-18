@@ -195,10 +195,12 @@
     "nav": {
       "overview": "Aperçu",
       "contacts": "Contacts",
+      "leads": "Prospects",
       "items": "Articles",
       "documents": "Documents",
       "portalAccess": "Accès au portail",
       "branding": "Image de marque",
+      "pipelines": "Réglages du pipeline",
       "audit": "Journal d'audit",
       "team": "Équipe",
       "dashboard": "Tableau de bord"
@@ -208,6 +210,16 @@
     "noAccessTitle": "Accès indisponible",
     "noAccessDescription": "Vous n'avez plus accès à cet espace de travail, ou il vous est fermé. Si cela est inattendu, contactez votre administrateur ou le prestataire.",
     "readonlyBanner": "Cette organisation est suspendue. Vous pouvez lire, imprimer et télécharger ce qu'elle possède déjà ; les nouvelles écritures et la synchronisation sont refusées tant que le prestataire ne lève pas la suspension."
+  },
+  "crm": {
+    "leads": {
+      "title": "Prospects",
+      "description": "Toutes les demandes captées par cet espace de travail — traitées sur le tableau du pipeline ou filtrées dans la liste."
+    },
+    "pipelines": {
+      "title": "Réglages du pipeline",
+      "description": "Les étapes qui forment les colonnes du tableau des prospects. Les étapes de gain et de perte sont garanties par le serveur."
+    }
   },
   "audit": {
     "title": "Journal d'audit",

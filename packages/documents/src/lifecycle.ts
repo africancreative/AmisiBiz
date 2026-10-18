@@ -59,6 +59,16 @@ const TRANSITIONS: Readonly<Record<DocumentType, Transitions>> = {
     ISSUED: ["PARTIALLY_DELIVERED", "DELIVERED", "CANCELLED"],
     PARTIALLY_DELIVERED: ["DELIVERED"],
   },
+  // An order behaves like an invoice for payment (DRAFT→ISSUED→paid/overdue,
+  // all derived from recorded payments — never clicked) and adds CANCELLED for
+  // the unfulfilled-order exit. VOID stays the issued-order correction path.
+  ORDER: {
+    DRAFT: ["ISSUED"],
+    ISSUED: ["PARTIALLY_PAID", "PAID", "OVERDUE", "CANCELLED", "VOID"],
+    PARTIALLY_PAID: ["PAID", "OVERDUE", "ISSUED", "CANCELLED", "VOID"],
+    PAID: ["PARTIALLY_PAID", "VOID"],
+    OVERDUE: ["PARTIALLY_PAID", "PAID", "VOID"],
+  },
 };
 
 export class DocumentLifecycleError extends Error {

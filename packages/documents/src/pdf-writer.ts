@@ -487,6 +487,9 @@ const DOCUMENT_TITLES: Record<DocumentType, string> = {
   QUOTATION: "QUOTATION",
   INVOICE: "INVOICE",
   DELIVERY_NOTE: "DELIVERY NOTE",
+  // An order is not a tax invoice — the template labels it plainly and the
+  // constitution forbids any tax-invoice wording here.
+  ORDER: "ORDER",
 };
 
 interface Column {

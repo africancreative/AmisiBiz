@@ -34,6 +34,27 @@ export default async function DocumentDetailPage({
         tenantRoleHasPermission(role, PERMISSIONS.DELIVERY_NOTES_ISSUE)
       }
       canVoid={tenantRoleHasPermission(role, PERMISSIONS.INVOICES_VOID)}
+      // ORDER shares the document engine but not the invoice permission keys: the
+      // actions dispatch on the STORED type (`VOID_PERMISSION`,
+      // `PAYMENT_PERMISSION`, `ISSUE_PERMISSION` in `server/actions/document.ts`),
+      // so each order verb is offered only when its own ORDERS_* key is held.
+      // Folding these into the invoice flags above would show buttons the server
+      // is obliged to refuse.
+      canIssueOrder={tenantRoleHasPermission(role, PERMISSIONS.ORDERS_ISSUE)}
+      canVoidOrder={tenantRoleHasPermission(role, PERMISSIONS.ORDERS_VOID)}
+      canRecordOrderPayment={tenantRoleHasPermission(
+        role,
+        PERMISSIONS.ORDERS_ISSUE,
+      )}
+      canReverseOrderPayment={tenantRoleHasPermission(
+        role,
+        PERMISSIONS.ORDERS_ISSUE,
+      )}
+      canCreateOrder={tenantRoleHasPermission(role, PERMISSIONS.ORDERS_CREATE)}
+      canCreateInvoice={tenantRoleHasPermission(
+        role,
+        PERMISSIONS.INVOICES_CREATE,
+      )}
       canRecordQuotationDecision={tenantRoleHasPermission(
         role,
         PERMISSIONS.QUOTATIONS_ISSUE,

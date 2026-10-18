@@ -83,6 +83,16 @@ export default async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Public share pages live OUTSIDE the locale tree (`app/s/[token]`): the
+  // next-intl middleware with `localePrefix: "always"` would otherwise
+  // redirect `/s/<token>` to `/en/s/<token>` and 404 it. The page renders
+  // English-primary by design and its data comes from the unauthenticated
+  // `/api/public/*` routes, which are already locale-free. Anonymous by
+  // protocol: no session check, no tenant header, no redirect.
+  if (pathname === "/s" || pathname.startsWith("/s/")) {
+    return NextResponse.next();
+  }
+
   const baseDomain = getBaseDomain();
   let tenantSubdomain: string | null = null;
 

@@ -20,6 +20,7 @@ import {
   createDocumentDraftSchema,
   createDeliveryNoteSchema,
   convertQuotationSchema,
+  documentReasonSchema,
   issueDocumentSchema,
   recordDeliverySchema,
   recordPaymentSchema,
@@ -34,9 +35,12 @@ import {
   documentErrorActionCode,
 } from "@/server/services/documents/errors";
 import {
+  cancelOrder,
   convertQuotationToInvoice,
+  convertQuotationToOrder,
   createDeliveryNoteFromDocument,
   createDraft,
+  createInvoiceFromOrder,
   createReplacementDraft,
   issueDocument,
   recordDelivery,
@@ -300,18 +304,49 @@ const CREATE_PERMISSION: Record<DocumentType, Permission> = {
   QUOTATION: PERMISSIONS.QUOTATIONS_CREATE,
   INVOICE: PERMISSIONS.INVOICES_CREATE,
   DELIVERY_NOTE: PERMISSIONS.DELIVERY_NOTES_CREATE,
+  ORDER: PERMISSIONS.ORDERS_CREATE,
 };
 
 const UPDATE_DRAFT_PERMISSION: Record<DocumentType, Permission> = {
   QUOTATION: PERMISSIONS.QUOTATIONS_UPDATE_DRAFT,
   INVOICE: PERMISSIONS.INVOICES_UPDATE_DRAFT,
   DELIVERY_NOTE: PERMISSIONS.DELIVERY_NOTES_UPDATE_DRAFT,
+  ORDER: PERMISSIONS.ORDERS_UPDATE_DRAFT,
 };
 
 const ISSUE_PERMISSION: Record<DocumentType, Permission> = {
   QUOTATION: PERMISSIONS.QUOTATIONS_ISSUE,
   INVOICE: PERMISSIONS.INVOICES_ISSUE,
   DELIVERY_NOTE: PERMISSIONS.DELIVERY_NOTES_ISSUE,
+  ORDER: PERMISSIONS.ORDERS_ISSUE,
+};
+
+/**
+ * VOID applies to invoices and orders only (the renamed database CHECK). The
+ * stored type picks the key: an invoice void stays `INVOICES_VOID`, an order
+ * void requires `ORDERS_VOID`. Quotations and delivery notes have no void
+ * permission to reach — the engine refuses them with its own VALIDATION error
+ * before anything is written — and fall back to the invoice key so the
+ * dispatch itself stays total.
+ */
+const VOID_PERMISSION: Record<DocumentType, Permission> = {
+  QUOTATION: PERMISSIONS.INVOICES_VOID,
+  INVOICE: PERMISSIONS.INVOICES_VOID,
+  DELIVERY_NOTE: PERMISSIONS.INVOICES_VOID,
+  ORDER: PERMISSIONS.ORDERS_VOID,
+};
+
+/**
+ * Payments advance the money lifecycle of the document they settle, per type:
+ * an invoice payment requires `INVOICES_ISSUE` (the existing rule), an ORDER
+ * payment requires `ORDERS_ISSUE`. A click is never a payment: only this
+ * action, authorized against the stored type, writes a `DocumentPayment`.
+ */
+const PAYMENT_PERMISSION: Record<DocumentType, Permission> = {
+  QUOTATION: PERMISSIONS.INVOICES_ISSUE,
+  INVOICE: PERMISSIONS.INVOICES_ISSUE,
+  DELIVERY_NOTE: PERMISSIONS.INVOICES_ISSUE,
+  ORDER: PERMISSIONS.ORDERS_ISSUE,
 };
 
 const tenantIdSchema = z.object({
@@ -379,6 +414,34 @@ async function authorizeByDocumentType(
   return authorizeTenant(userId, tenantId, permissionFor(document.type));
 }
 
+/**
+ * The payment-reversal twin of `authorizeByDocumentType`: a reversal names a
+ * payment, not a document, so the payment's own document (read inside the
+ * caller's authorized tenant scope — a foreign payment simply finds no row)
+ * decides whether `INVOICES_ISSUE` or `ORDERS_ISSUE` is exercised.
+ */
+async function authorizeByPaymentDocumentType(
+  userId: string,
+  tenantId: string,
+  paymentId: string,
+): Promise<TenantAuthzContext> {
+  await authorizeTenant(userId, tenantId, PERMISSIONS.DOCUMENTS_READ);
+
+  const payment = await prisma.documentPayment.findFirst({
+    where: { id: paymentId, tenantId },
+    select: { document: { select: { type: true } } },
+  });
+  if (!payment) {
+    throw new DocumentServiceError("NOT_FOUND", "Payment not found.");
+  }
+
+  return authorizeTenant(
+    userId,
+    tenantId,
+    PAYMENT_PERMISSION[payment.document.type],
+  );
+}
+
 const createDraftActionSchema = tenantIdSchema.merge(createDocumentDraftSchema);
 const updateDraftActionSchema = tenantIdSchema.merge(updateDocumentDraftSchema);
 const issueActionSchema = tenantIdSchema.merge(issueDocumentSchema);
@@ -393,6 +456,40 @@ const paymentActionSchema = tenantIdSchema.merge(recordPaymentSchema);
 const reverseActionSchema = tenantIdSchema.merge(reversePaymentSchema);
 const replacementActionSchema = tenantIdSchema.merge(
   z.object({ documentId: z.string().uuid("Invalid document ID") }),
+);
+
+/**
+ * Same idempotency-key shape the draft and delivery-note writes already accept
+ * (declared in `document-write.ts`); the ORDER conversions reuse the rule, so
+ * the literal is restated next to the schemas that use it.
+ */
+const idempotencyKeySchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{8,64}$/, "Invalid idempotency key")
+  .nullish();
+
+const convertToOrderActionSchema = tenantIdSchema.merge(
+  z.object({
+    quotationId: z.string().uuid("Invalid quotation ID"),
+    issueDate: z.coerce.date().optional(),
+    idempotencyKey: idempotencyKeySchema,
+  }),
+);
+
+const invoiceFromOrderActionSchema = tenantIdSchema.merge(
+  z.object({
+    orderId: z.string().uuid("Invalid order ID"),
+    issueDate: z.coerce.date().optional(),
+    dueDate: z.coerce.date().nullish(),
+    idempotencyKey: idempotencyKeySchema,
+  }),
+);
+
+const cancelOrderActionSchema = tenantIdSchema.merge(
+  z.object({
+    documentId: z.string().uuid("Invalid document ID"),
+    reason: documentReasonSchema,
+  }),
 );
 
 /** Creates a quotation, invoice or delivery note draft. */
@@ -510,7 +607,12 @@ export async function issueDocumentAction(
   }
 }
 
-/** Voids an issued invoice, keeping the row and number for the trail. */
+/**
+ * Voids an issued invoice or order, keeping the row and number for the trail.
+ * The stored type picks the key: `INVOICES_VOID` for an invoice,
+ * `ORDERS_VOID` for an order — the SALES role holds neither void permission,
+ * FINANCE holds both (the matrix, asserted in the phase tests).
+ */
 export async function voidInvoiceAction(
   rawInput: unknown,
 ): Promise<ActionResult<void>> {
@@ -523,10 +625,11 @@ export async function voidInvoiceAction(
   const { tenantId, documentId, reason } = parsed.data;
 
   try {
-    const context = await authorizeTenant(
+    const context = await authorizeByDocumentType(
       session.user.id,
       tenantId,
-      PERMISSIONS.INVOICES_VOID,
+      documentId,
+      (type) => VOID_PERMISSION[type],
     );
     await voidInvoice(context, session.user.id, { documentId, reason });
     return { success: true };
@@ -655,7 +758,11 @@ export async function recordDeliveryAction(
   }
 }
 
-/** Records a payment against an invoice; the status is then derived. */
+/**
+ * Records a payment against an invoice or an order; the status is then derived.
+ * The stored document type — never the request — picks the permission:
+ * INVOICE → `INVOICES_ISSUE`, ORDER → `ORDERS_ISSUE`.
+ */
 export async function recordPaymentAction(
   rawInput: unknown,
 ): Promise<ActionResult<{ id: string; status: string }>> {
@@ -668,10 +775,11 @@ export async function recordPaymentAction(
   const { tenantId, documentId, ...payment } = parsed.data;
 
   try {
-    const context = await authorizeTenant(
+    const context = await authorizeByDocumentType(
       session.user.id,
       tenantId,
-      PERMISSIONS.INVOICES_ISSUE,
+      documentId,
+      (type) => PAYMENT_PERMISSION[type],
     );
     const result = await recordPayment(context, session.user.id, {
       documentId,
@@ -700,10 +808,10 @@ export async function reversePaymentAction(
   const { tenantId, paymentId, reason } = parsed.data;
 
   try {
-    const context = await authorizeTenant(
+    const context = await authorizeByPaymentDocumentType(
       session.user.id,
       tenantId,
-      PERMISSIONS.INVOICES_ISSUE,
+      paymentId,
     );
     await reversePayment(context, session.user.id, { paymentId, reason });
     return { success: true };
@@ -736,5 +844,101 @@ export async function createReplacementAction(
     return { success: true, data: created };
   } catch (error) {
     return documentActionFailure(error, "createReplacementAction");
+  }
+}
+
+/* --------------------------------- orders ---------------------------------- */
+
+/**
+ * Converts an accepted quotation into a draft ORDER. Gated `ORDERS_CREATE`,
+ * mirroring how `convertQuotationAction` is gated `INVOICES_CREATE`: the
+ * conversion creates an order, so it needs the permission that creates one —
+ * never the quotation key, and never a type the caller sent.
+ */
+export async function convertQuotationToOrderAction(
+  rawInput: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  const session = await requireAuth();
+
+  const parsed = convertToOrderActionSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid order conversion request.");
+  }
+  const { tenantId, quotationId, issueDate, idempotencyKey } = parsed.data;
+
+  try {
+    const context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ORDERS_CREATE,
+    );
+    const created = await convertQuotationToOrder(context, session.user.id, {
+      quotationId,
+      issueDate: issueDate ?? null,
+      idempotencyKey: idempotencyKey ?? null,
+    });
+    return { success: true, data: created };
+  } catch (error) {
+    return documentActionFailure(error, "convertQuotationToOrderAction");
+  }
+}
+
+/** Raises a draft invoice from an issued order. Gated `INVOICES_CREATE`. */
+export async function createInvoiceFromOrderAction(
+  rawInput: unknown,
+): Promise<ActionResult<{ id: string }>> {
+  const session = await requireAuth();
+
+  const parsed = invoiceFromOrderActionSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid invoice-from-order request.");
+  }
+  const { tenantId, orderId, issueDate, dueDate, idempotencyKey } = parsed.data;
+
+  try {
+    const context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.INVOICES_CREATE,
+    );
+    const created = await createInvoiceFromOrder(context, session.user.id, {
+      orderId,
+      issueDate: issueDate ?? null,
+      dueDate: dueDate ?? null,
+      idempotencyKey: idempotencyKey ?? null,
+    });
+    return { success: true, data: created };
+  } catch (error) {
+    return documentActionFailure(error, "createInvoiceFromOrderAction");
+  }
+}
+
+/**
+ * Cancels an unfulfilled order with a mandatory reason. Cancel and void share
+ * one gate — `ORDERS_VOID` — exactly as invoice voiding is the destructive
+ * order/invoice correction permission; SALES, which lacks it, is refused here
+ * even though it can create, draft-edit and issue orders.
+ */
+export async function cancelOrderAction(
+  rawInput: unknown,
+): Promise<ActionResult<void>> {
+  const session = await requireAuth();
+
+  const parsed = cancelOrderActionSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return invalidInput(parsed.error, "Invalid cancellation request.");
+  }
+  const { tenantId, documentId, reason } = parsed.data;
+
+  try {
+    const context = await authorizeTenant(
+      session.user.id,
+      tenantId,
+      PERMISSIONS.ORDERS_VOID,
+    );
+    await cancelOrder(context, session.user.id, { documentId, reason });
+    return { success: true };
+  } catch (error) {
+    return documentActionFailure(error, "cancelOrderAction");
   }
 }

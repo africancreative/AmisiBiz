@@ -70,6 +70,15 @@ export const prismaMock = {
   // for the same reason the comment at the top of this file gives.
   syncOperation: mockDelegate(),
   syncDeletion: mockDelegate(),
+  // AGENT 02 Phase 2A: the CRM surfaces. Leads, pipelines with their ordered
+  // stages, tasks, and the append-only ActivityEvent timeline are ordinary
+  // models in `schema.prisma`, so they get ordinary delegates for the same
+  // reason the comment at the top of this file gives.
+  lead: mockDelegate(),
+  pipeline: mockDelegate(),
+  pipelineStage: mockDelegate(),
+  task: mockDelegate(),
+  activityEvent: mockDelegate(),
   $transaction: vi.fn(async (arg: unknown) =>
     typeof arg === "function"
       ? await (arg as (tx: unknown) => Promise<unknown>)(prismaMock)

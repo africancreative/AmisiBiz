@@ -201,7 +201,9 @@
       "branding": "Branding",
       "audit": "Audit log",
       "team": "Team",
-      "dashboard": "Dashboard"
+      "dashboard": "Dashboard",
+      "leads": "Leads",
+      "pipelines": "Pipeline settings"
     },
     "pendingTitle": "This workspace has not been opened yet",
     "pendingDescription": "The provider has registered this organisation but has not activated it. Nothing can be read or written until a platform administrator activates it with a recorded reason.",
@@ -736,5 +738,15 @@
     "step2": "Preferences",
     "step3": "Invite your team",
     "completeButton": "Go to dashboard"
+  },
+  "crm": {
+    "leads": {
+      "title": "Leads",
+      "description": "Every enquiry this workspace has captured — worked on the pipeline board or filtered in the list."
+    },
+    "pipelines": {
+      "title": "Pipeline settings",
+      "description": "The stages that give the leads board its columns. Win and loss stages are guaranteed by the server."
+    }
   }
 }

@@ -9,12 +9,13 @@ import {
   type ItemOption,
   type TaxRateOption,
 } from "./new-document-client";
+import type { DocumentTypeValue } from "@/components/documents/document-labels";
 import { getContactsAction } from "@/server/actions/contact";
 import { getItemsAction, getTaxCategoriesAction } from "@/server/actions/item";
 
 export const dynamic = "force-dynamic";
 
-type DocumentTypeChoice = "QUOTATION" | "INVOICE" | "DELIVERY_NOTE";
+type DocumentTypeChoice = DocumentTypeValue;
 
 interface NewDocumentPageProps {
   params: Promise<{ locale: string }>;
@@ -154,12 +155,17 @@ export default async function NewDocumentPage({
     role,
     PERMISSIONS.DELIVERY_NOTES_CREATE,
   );
+  const canCreateOrder = tenantRoleHasPermission(
+    role,
+    PERMISSIONS.ORDERS_CREATE,
+  );
 
   // If the user doesn't have permission to create the requested type, deny the
   // page entirely rather than render a form that cannot submit.
   const requestedType = typeParam as DocumentTypeChoice | "";
   const allowedTypes: DocumentTypeChoice[] = [
     ...(canCreateQuotation ? ["QUOTATION" as const] : []),
+    ...(canCreateOrder ? ["ORDER" as const] : []),
     ...(canCreateInvoice ? ["INVOICE" as const] : []),
     ...(canCreateDeliveryNote ? ["DELIVERY_NOTE" as const] : []),
   ];
@@ -188,6 +194,7 @@ export default async function NewDocumentPage({
       canCreateQuotation={canCreateQuotation}
       canCreateInvoice={canCreateInvoice}
       canCreateDeliveryNote={canCreateDeliveryNote}
+      canCreateOrder={canCreateOrder}
       title={t("newDocument.title")}
       description={t("newDocument.description")}
     />

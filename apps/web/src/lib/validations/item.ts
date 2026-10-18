@@ -236,6 +236,16 @@ export const itemQuerySchema = z.object({
   search: z.string().max(100).optional(),
   type: itemTypeSchema.optional(),
   status: itemStatusSchema.optional(),
+  /** Catalogue category filter (AGENT 02 module C). */
+  categoryId: z.string().uuid("Invalid category ID").optional(),
+  /**
+   * Archived items are EXCLUDED unless asked for: `ARCHIVED` is the terminal
+   * catalogue state added by migration 24b, and existing list callers must
+   * keep seeing exactly what they saw before. The archive screen passes
+   * `true` (alone, or with `status: "INACTIVE"`/`"ACTIVE"` for a mixed view —
+   * an explicit `status` filter always wins over the default exclusion).
+   */
+  includeArchived: z.boolean().default(false),
   page: z.number().int().positive().default(1),
   pageSize: z.number().int().positive().max(100).default(25),
   sortBy: z

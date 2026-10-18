@@ -9,15 +9,15 @@ Basis: full seam inspection (schema 505–947, `packages/documents`, `src/server
 - **Quotation → order → invoice/delivery** reuses `sourceDocumentId` derivation: acceptance converts a QUOTATION to a DRAFT ORDER (`convertQuotationToOrder` mirrors `convertQuotationToInvoice`); an ORDER issues INVOICEs and DELIVERY_NOTEs against it. The `one_invoice_per_source` partial index stays for quotation-sourced invoices; order-sourced invoices are one per order too (same index shape, extended).
 - **"Paid" is derived, never clicked.** ORDER payment state uses the same `deriveInvoiceStatus` (DRAFT→ISSUED→PARTIALLY_PAID/PAID/OVERDUE transitions). A refund is `DocumentPayment.reversedAt` (append-only reversal, already the verified pattern) — no invented REFUNDED status; the UI labels "refunded balance" from reversal data. Cancellation of an unfulfilled order = CANCELLED transition with reason; VOID reserved for issued-order correction path like invoices.
 - **Inventory is OUT of approved scope → documented boundary, no fake stock.** No `StockLevel` table, no availability numbers anywhere. Products/pages show price + "Request a quote" capture; fulfilment truth is DELIVERY_NOTE lines (`deliveredQuantity` accumulation on source lines, existing verified mechanism). This is recorded in §7 and in the final report.
-- **Tenant resolution for public surfaces never uses paths.** `/s/[token]` is a *resource* route, not tenant routing: the token resolves a `ShareLink` row server-side, which carries the `tenantId`. The approved subdomain model (middleware `x-tenant-subdomain`, reserved-subdomain 404) remains the only tenant-addressing scheme for the app itself.
+- **Tenant resolution for public surfaces never uses paths.** `/s/[token]` is a _resource_ route, not tenant routing: the token resolves a `ShareLink` row server-side, which carries the `tenantId`. The approved subdomain model (middleware `x-tenant-subdomain`, reserved-subdomain 404) remains the only tenant-addressing scheme for the app itself.
 - **Public unauthenticated data access goes through SECURITY DEFINER functions** (`app_public_*`, following the `app_find_user_id_by_email` precedent), each returning a minimized `jsonb` payload and enforcing tenant isolation inside the function. No RLS context exists for anonymous readers; nothing anonymous may read raw tables.
-- **Marketing campaigns are AGENT 04 territory.** This phase carries campaign *data plumbing only*: UTM strings on `ShareLink`/`Lead` and `Contact.sourceCampaign` text. No Campaign table.
+- **Marketing campaigns are AGENT 04 territory.** This phase carries campaign _data plumbing only_: UTM strings on `ShareLink`/`Lead` and `Contact.sourceCampaign` text. No Campaign table.
 - **No cron/reminder jobs.** Lead "overdue" and task "due" are computed from timestamps at read time; nothing is claimed to be sent.
 - **Never automatic dedupe.** Duplicate detection scores candidates (exact normalized email/phone = strong; name-only = ambiguous) and returns them for human review; merge is an explicit two-step (preview → apply) action.
 
-## 1. Data model (migration 24: `20261031000000_agent02_crm_commerce`)
+## 1. Data model (migrations 24a+24b: `20261031000000_agent02_document_type_order_enum` + `20261031000001_agent02_crm_commerce`)
 
-Single forward migration. All new tenant tables: `ENABLE ROW LEVEL SECURITY`, the 4-policy DO-loop (`app_read/insert/update/delete_<T>` with `has_tenant_read_access`/`has_tenant_write_access`), explicit `GRANT` (default privileges no longer exist), append to the anon/authenticated revoke list successor. FORCE RLS is not used anywhere (owner-bypass acknowledged — `amisibiz_app` connection remains the owner-gated deployment item).
+Split REQUIRED: PostgreSQL forbids using a new enum value in the same transaction that adds it, and `prisma migrate deploy` runs one file per transaction — so 24a is `ALTER TYPE "DocumentType" ADD VALUE 'ORDER'` alone, 24b carries everything else. Single logical change; forward-only. All new tenant tables: `ENABLE ROW LEVEL SECURITY`, the 4-policy DO-loop (`app_read/insert/update/delete_<T>` with `has_tenant_read_access`/`has_tenant_write_access`), explicit `GRANT` (default privileges no longer exist), append to the anon/authenticated revoke list successor. FORCE RLS is not used anywhere (owner-bypass acknowledged — `amisibiz_app` connection remains the owner-gated deployment item). Child rows carry their own `tenantId` + tenant-match trigger (junction `ContactTag` included — the policy template keys on `"tenantId"` and exists in no other shape).
 
 ### 1.1 New enums
 
@@ -51,7 +51,7 @@ Single forward migration. All new tenant tables: `ENABLE ROW LEVEL SECURITY`, th
 
 ### 1.7 Share links (modules C/E)
 
-`ShareLink` (tenantId, kind, token `@@unique` (26-char base62, `gen` server-side, never client-supplied), itemId? SetNull, documentId? SetNull, active default true, expiresAt?, message?, utmSource/utmMedium/utmCampaign, createdAt/updatedAt; partial uniques per kind: (tenantId,itemId) WHERE PRODUCT AND active, (tenantId,documentId) WHERE ORDER_STATUS AND active). `viewCount Int @default(0)` bumped by the public resolver function (retry double-count tolerated and documented — no client-supplied attribution).
+`ShareLink` (tenantId, kind, token `@@unique` (26-char base62, `gen` server-side, never client-supplied), itemId? SetNull, documentId? SetNull, active default true, expiresAt?, message?, utmSource/utmMedium/utmCampaign, createdAt/updatedAt; partial uniques per kind: (tenantId,itemId) WHERE PRODUCT AND active, (tenantId,documentId) WHERE ORDER_STATUS AND active). `viewCount Int @default(0)` bumped by the public resolver function (retry double-count tolerated and documented — no client-supplied attribution). LEAD_FORM links carry no FK (they address the tenant's capture form); reviewed deviations from first-draft spec: `VariantStatus {ACTIVE INACTIVE}` added (reusing ItemStatus would leak ARCHIVED), `WRITE_PERMISSIONS` extended with the 12 new write-class keys (suspended-tenant write gate demands classification), Contact gained no direct shareLinks relation.
 
 ### 1.8 Document/ORDER extension
 
@@ -91,7 +91,7 @@ Currency explicit on every price surface (Lead.currency default from TenantSetti
 
 ## 5. Offline/sync posture
 
-`SUPPORTED_SYNC_ENTITIES` stays `contact, item, customer_price` this pass. Lead/Task carry `revision`+trigger so they *can* be added without another schema pass; adding them to the registry is the natural follow-up (push handlers must re-key into the same actions). Contact registry field whitelist must include the new columns or offline clients silently drop them — extend `registry.ts` select field lists in Phase 2 (small, tested).
+`SUPPORTED_SYNC_ENTITIES` stays `contact, item, customer_price` this pass. Lead/Task carry `revision`+trigger so they _can_ be added without another schema pass; adding them to the registry is the natural follow-up (push handlers must re-key into the same actions). Contact registry field whitelist must include the new columns or offline clients silently drop them — extend `registry.ts` select field lists in Phase 2 (small, tested).
 
 ## 6. Test matrix (10 required areas → files)
 

@@ -15,6 +15,8 @@ interface ItemsPageProps {
     search?: string;
     type?: string;
     status?: string;
+    category?: string;
+    archived?: string;
     sortBy?: string;
     sortOrder?: string;
   }>;
@@ -37,6 +39,8 @@ export default async function ItemsPage({
   const search = resolvedSearchParams.search || "";
   const type = resolvedSearchParams.type || "";
   const status = resolvedSearchParams.status || "";
+  const category = resolvedSearchParams.category || "";
+  const includeArchived = resolvedSearchParams.archived === "1";
   const sortBy = resolvedSearchParams.sortBy || "createdAt";
   const sortOrder = resolvedSearchParams.sortOrder || "desc";
 
@@ -51,8 +55,11 @@ export default async function ItemsPage({
       initialSearch={search}
       initialType={type}
       initialStatus={status}
+      initialCategoryId={category}
+      initialIncludeArchived={includeArchived}
       initialSortBy={sortBy}
       initialSortOrder={sortOrder}
+      readonly={state.readonly}
       canCreate={tenantRoleHasPermission(role, PERMISSIONS.ITEMS_CREATE)}
       canUpdate={tenantRoleHasPermission(role, PERMISSIONS.ITEMS_UPDATE)}
       canDelete={tenantRoleHasPermission(role, PERMISSIONS.ITEMS_DELETE)}

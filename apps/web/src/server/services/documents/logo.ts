@@ -53,14 +53,25 @@ export async function loadLogoImage(
   logoUrl: string | null,
 ): Promise<PdfImage | null> {
   if (!logoUrl) return null;
-  const file = resolveLogoFile(logoUrl);
-  if (!file) return null;
 
   let buffer: Uint8Array;
-  try {
-    buffer = new Uint8Array(await readFile(file));
-  } catch {
-    return null;
+  if (logoUrl.startsWith("http://") || logoUrl.startsWith("https://")) {
+    try {
+      const response = await fetch(logoUrl);
+      if (!response.ok) return null;
+      buffer = new Uint8Array(await response.arrayBuffer());
+    } catch {
+      return null;
+    }
+  } else {
+    const file = resolveLogoFile(logoUrl);
+    if (!file) return null;
+
+    try {
+      buffer = new Uint8Array(await readFile(file));
+    } catch {
+      return null;
+    }
   }
 
   const lower = logoUrl.toLowerCase();

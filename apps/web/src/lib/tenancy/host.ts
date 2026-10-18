@@ -87,6 +87,7 @@ export function extractSubdomain(
   const normalized = normalizeHost(host);
   if (!normalized || !baseDomain) return null;
   if (normalized === baseDomain) return null;
+  if (normalized === `crm.${baseDomain}`) return null;
   const suffix = `.${baseDomain}`;
   if (!normalized.endsWith(suffix)) return null;
   const prefix = normalized.slice(0, -suffix.length);

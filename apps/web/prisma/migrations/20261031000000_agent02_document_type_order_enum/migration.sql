@@ -1,0 +1,22 @@
+-- Migration: AGENT 02 (24a) — the DocumentType enum gains ORDER.
+-- Created: 2026-10-31
+--
+-- Why this file exists on its own: PostgreSQL refuses to let a new enum value
+-- be USED inside the same transaction that adds it (the value is not
+-- visible to parse analysis until the ALTER TYPE commits), and
+-- `prisma migrate deploy` runs each migration file in a single transaction.
+-- The follow-up file (20261031000001_agent02_crm_commerce) references
+-- 'ORDER' in CHECK branches, in the document-numbering functions' default
+-- prefix CASE, and in seed predicates — all of which would fail if the value
+-- were added in that same transaction. Splitting the ADD VALUE into this
+-- committed-first step is the documented, house-safe pattern.
+--
+-- Design anchor (docs/implementation/orchestration/agent-02-design.md §0/§1.8):
+-- orders are `Document` rows of a new type ORDER — not a new entity. No new
+-- DocumentStatus values are needed: ORDER reuses DRAFT, ISSUED,
+-- PARTIALLY_PAID, PAID, OVERDUE, CANCELLED and VOID, all pre-existing labels.
+--
+-- Nothing else belongs in this file. IF NOT EXISTS keeps a re-run (or a
+-- database where the value arrived out-of-band) a no-op.
+
+ALTER TYPE "public"."DocumentType" ADD VALUE IF NOT EXISTS 'ORDER';

@@ -61,6 +61,13 @@ export const DEFAULT_DOCUMENT_NUMBERING: Readonly<
     periodStyle: "CALENDAR_YEAR",
     fiscalStartMonth: 1,
   },
+  ORDER: {
+    prefix: "ORD",
+    padding: 4,
+    separator: "-",
+    periodStyle: "CALENDAR_YEAR",
+    fiscalStartMonth: 1,
+  },
 };
 
 const SAFE_NUMBER = /^[A-Za-z0-9][A-Za-z0-9/_.-]{0,63}$/;

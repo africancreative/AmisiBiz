@@ -192,6 +192,14 @@ before any shared database is touched. The whole chain is scripted and committed
 PGHOST=localhost PGPORT=55499 PGUSER=postgres sh scripts/db/cleanroom-chain.sh <db>
 ```
 
+**Windows encoding trap (found 2026-10-18, AGENT 02 migration 24):** a bare
+`initdb` on Windows defaults the cluster to the ANSI codepage (WIN1252), and the
+committed chain migrations contain UTF-8 em-dashes in comments — the phase04
+migration then aborts with SQLSTATE 22P05, which looks like a broken migration
+but is a broken cluster. Always provision with
+`initdb -D <dir> -U postgres -A trust --no-sync --locale=C --encoding=UTF8`
+before running anything against the scratch cluster.
+
 `scripts/db/cleanroom-chain.sh` drops and recreates `<db>`, applies migrations
 1–7, proves the PRE-remediation leak with a foreign table, loads
 `apps/web/prisma/scripts/fixtures/phase1-legacy-fixture.sql`, applies 8–10, runs

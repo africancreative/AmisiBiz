@@ -51,6 +51,13 @@ const DEFAULT_SERIES: Record<
     periodStyle: "CALENDAR_YEAR",
     fiscalStartMonth: 1,
   },
+  ORDER: {
+    prefix: "ORD",
+    padding: 4,
+    separator: "-",
+    periodStyle: "CALENDAR_YEAR",
+    fiscalStartMonth: 1,
+  },
 };
 
 const DOCUMENT_TYPES: readonly DocumentType[] = [
