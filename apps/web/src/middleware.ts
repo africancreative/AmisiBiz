@@ -76,7 +76,7 @@ export default async function middleware(request: NextRequest) {
 
   if (
     pathname.startsWith("/_next") ||
-    pathname.startsWith("/api/health") ||
+    pathname.startsWith("/api/") ||
     pathname.startsWith("/auth/") ||
     isStaticAsset(pathname)
   ) {
